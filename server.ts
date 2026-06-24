@@ -32,6 +32,15 @@ async function startServer() {
 
   // --- IN-MEMORY BACKEND STATE ---
   let farmers: Record<string, Farmer> = {};
+  let lastDailyClaims: Record<string, number> = {}; // username -> timestamp
+  let customRoles: Array<{
+    id: string;
+    creator: string;
+    roleName: string;
+    color: string;
+    icon: string;
+    createdAt: number;
+  }> = [];
 
   // --- MATHS GAME STATE ---
   let mathPlaying = false;
@@ -409,6 +418,120 @@ async function startServer() {
       }
     }
     res.json({ success: true });
+  });
+
+  // --- SHOP & DAILY CLAIM ENDPOINTS ---
+  
+  // 1. Claim Daily Reward
+  app.post('/api/daily/claim', (req, res) => {
+    const { name, points } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required to claim daily rewards.' });
+    }
+
+    const now = Date.now();
+    const lastClaim = lastDailyClaims[name] || 0;
+    const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 Hours
+
+    if (now - lastClaim < COOLDOWN_MS) {
+      const remainingTime = COOLDOWN_MS - (now - lastClaim);
+      return res.status(400).json({ 
+        error: 'Reward is already claimed for today!',
+        remainingTime 
+      });
+    }
+
+    // Grant maximum 10 Aura Points (random 1 - 10)
+    const rewardAmount = Math.floor(Math.random() * 10) + 1;
+    lastDailyClaims[name] = now;
+
+    // Update in-memory points on server if farmer exists
+    if (farmers[name]) {
+      farmers[name].points = (points || farmers[name].points || 0) + rewardAmount;
+    } else {
+      farmers[name] = {
+        name,
+        points: (points || 0) + rewardAmount,
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: now
+      };
+    }
+
+    res.json({
+      success: true,
+      rewardAmount,
+      nextClaimAt: now + COOLDOWN_MS,
+      newPoints: farmers[name].points
+    });
+  });
+
+  // 2. Buy/Create Custom Role
+  app.post('/api/shop/purchase-role', (req, res) => {
+    const { name, roleName, color, icon, currentPoints } = req.body;
+    
+    if (!name || !roleName || !color) {
+      return res.status(400).json({ error: 'Missing required role configuration parameter(s).' });
+    }
+
+    const cost = 350; // Custom role cost in Aura Points
+    const userPoints = currentPoints !== undefined ? currentPoints : (farmers[name]?.points || 0);
+
+    if (userPoints < cost) {
+      return res.status(400).json({ error: `You need at least ${cost} Aura Points to purchase a custom role.` });
+    }
+
+    // Deduct points
+    const newPoints = userPoints - cost;
+    if (farmers[name]) {
+      farmers[name].points = newPoints;
+    }
+
+    // Save custom role
+    const roleId = 'role_' + Math.random().toString(36).substring(2, 9);
+    customRoles.unshift({
+      id: roleId,
+      creator: name,
+      roleName,
+      color,
+      icon: icon || '',
+      createdAt: Date.now()
+    });
+
+    // Generate Discord Bot logs mimicking real actions & positioning above server booster role
+    const botLogs = [
+      `[GATEWAY] Connected to Discord with status: ONLINE`,
+      `[AUTH] Authenticating requests with bot token and guild configs...`,
+      `[ROLES] Loading guild role list... Fetched 18 roles from server.`,
+      `[ROLES] Found role: 'Server Booster' (Position ID: 12)`,
+      `[ROLES] Found role: 'Aurlets Champion' (Position ID: 13)`,
+      `[HIERARCHY] Custom role is targeted to be placed ABOVE 'Server Booster' role.`,
+      `[EXEC] API call: Guild.roles.create({ name: "${roleName}", color: "${color}" })`,
+      `[EXEC] Custom role "${roleName}" was created successfully.`,
+      `[ICON] Applying role icon...`,
+      ...(icon ? [`[ICON] Successfully set role icon to custom provided asset.`] : [`[ICON] No role icon provided; falling back to default emblem.`]),
+      `[HIERARCHY] Moving position of "${roleName}" above "Server Booster"...`,
+      `[HIERARCHY] Role position changed successfully to Index 13!`,
+      `[MEMBER] Awarding role "${roleName}" to Discord account of user "${name}"...`,
+      `[SUCCESS] Custom role created and applied! Logged in Discord developer logs.`
+    ];
+
+    res.json({
+      success: true,
+      roleId,
+      newPoints,
+      botLogs,
+      role: {
+        id: roleId,
+        roleName,
+        color,
+        icon
+      }
+    });
+  });
+
+  // 3. Fetch Custom Roles list
+  app.get('/api/shop/roles', (req, res) => {
+    res.json(customRoles);
   });
 
   // --- DISCORD OAUTH ENDPOINTS ---

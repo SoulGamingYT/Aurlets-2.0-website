@@ -14,7 +14,8 @@ import {
   ExternalLink,
   LogOut,
   User as UserIcon,
-  Coins
+  Coins,
+  ShoppingBag
 } from 'lucide-react';
 
 // Custom sub-components
@@ -26,6 +27,7 @@ import Staff from './components/Staff';
 import AuraGames from './components/AuraGames';
 import AFKFarming from './components/AFKFarming';
 import EidGift from './components/EidGift';
+import Shop from './components/Shop';
 import { DiscordIcon } from './components/Icons';
 import AuthModal from './components/AuthModal';
 
@@ -171,6 +173,7 @@ export default function App() {
     { id: 'staff', label: 'Staff', icon: Shield },
     { id: 'games', label: 'AuraGames', icon: Gamepad2 },
     { id: 'afk', label: 'AFK Farming', icon: Flame },
+    { id: 'shop', label: 'Reward Shop 🛒', icon: ShoppingBag },
     { id: 'gift', label: 'Eid Gift 🌙', icon: Gift }
   ];
 
@@ -205,6 +208,17 @@ export default function App() {
             setPoints={setPoints}
             isLoggedIn={isLoggedIn}
             setIsLoggedIn={setIsLoggedIn}
+            onOpenAuthModal={() => setShowAuthModal(true)}
+          />
+        );
+      case 'shop':
+        return (
+          <Shop
+            isLoggedIn={isLoggedIn}
+            nickname={nickname}
+            avatarUrl={avatarUrl}
+            points={points}
+            setPoints={setPoints}
             onOpenAuthModal={() => setShowAuthModal(true)}
           />
         );
