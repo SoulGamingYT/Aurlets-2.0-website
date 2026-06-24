@@ -52,8 +52,11 @@ export default function AFKFarming({
       try {
         const res = await fetch('/api/afk/leaderboard');
         if (res.ok) {
-          const data = await res.json();
-          setLeaderboard(data);
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            setLeaderboard(data);
+          }
         }
       } catch (err) {
         console.error('Error fetching AFK leaderboard:', err);

@@ -8,7 +8,6 @@ interface AuthModalProps {
   onClose: () => void;
   onDiscordLogin: () => void;
   onCustomLogin: (name: string, avatar: string) => void;
-  onSimulateDiscord: (user: { id: string; username: string; globalName: string; avatarUrl: string }) => void;
   discordConfigured: boolean;
 }
 
@@ -17,7 +16,6 @@ export default function AuthModal({
   onClose,
   onDiscordLogin,
   onCustomLogin,
-  onSimulateDiscord,
   discordConfigured
 }: AuthModalProps) {
   const [activeTab, setActiveTab] = useState<'discord' | 'custom' | 'setup'>('discord');
@@ -25,14 +23,6 @@ export default function AuthModal({
   // Custom login state
   const [customName, setCustomName] = useState('');
   const [selectedAvatar, setSelectedAvatar] = useState('https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80');
-
-  // Simulated Discord users
-  const simulatedUsers = [
-    { id: '11111111', username: 'ded_inside13', globalName: 'Ded_inside', avatarUrl: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=100&fit=crop&q=80' },
-    { id: '22222222', username: 'queen_z', globalName: 'Queenz 🌸', avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&fit=crop&q=80' },
-    { id: '33333333', username: 'loyalpeanut', globalName: 'PeanutLiver', avatarUrl: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100&fit=crop&q=80' },
-    { id: '44444444', username: 'soulmalik._.', globalName: 'SoulMalik', avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&fit=crop&q=80' }
-  ];
 
   const premadeAvatars = [
     'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
@@ -155,33 +145,13 @@ export default function AuthModal({
                     </p>
                   </div>
 
-                  {/* Simulator Box */}
-                  <div className="border border-zinc-800 rounded-xl p-4 bg-zinc-900/20 space-y-3">
-                    <span className="text-[10px] uppercase font-mono tracking-widest text-purple-400 font-bold">🛠 Live Discord Simulation Mode</span>
-                    <p className="text-xs text-zinc-400 leading-normal">
-                      Select one of our active community leaders below to simulate a real Discord authentication flow instantly:
+                  <div className="p-4 border border-zinc-900 rounded-xl bg-zinc-900/10 text-xs text-zinc-400 leading-normal space-y-2 text-center">
+                    <p>
+                      🔒 To ensure security and prevent account impersonation, Discord simulation logins have been disabled.
                     </p>
-
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      {simulatedUsers.map((simUser) => (
-                        <button
-                          key={simUser.id}
-                          onClick={() => onSimulateDiscord(simUser)}
-                          className="flex items-center gap-2.5 p-2 rounded-lg bg-zinc-900/60 border border-zinc-800 hover:border-purple-500/40 hover:bg-zinc-900 transition-all text-left"
-                        >
-                          <img
-                            src={simUser.avatarUrl}
-                            alt={simUser.globalName}
-                            referrerPolicy="no-referrer"
-                            className="w-7 h-7 rounded-full object-cover border border-zinc-800"
-                          />
-                          <div className="min-w-0">
-                            <span className="block text-xs font-bold text-white truncate">{simUser.globalName}</span>
-                            <span className="block text-[10px] text-zinc-500 truncate">{simUser.username}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
+                    <p className="font-semibold text-purple-400">
+                      Please use the "Guest Play" tab above to create a custom profile and enter the farm arena!
+                    </p>
                   </div>
                 </div>
               )}

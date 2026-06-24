@@ -16,7 +16,8 @@ import {
   Award, 
   Layers,
   Sparkle,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Gift
 } from 'lucide-react';
 import { DiscordIcon } from './Icons';
 
@@ -59,6 +60,14 @@ export default function Shop({
 }: ShopProps) {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'buy' | 'roles'>('buy');
+  const [shopNotification, setShopNotification] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  const showNotice = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setShopNotification({ message, type });
+    setTimeout(() => {
+      setShopNotification(prev => prev?.message === message ? null : prev);
+    }, 6000);
+  };
   
   // Daily Claim Cooldown State
   const [claimCooldown, setClaimCooldown] = useState<number | null>(null); // Time in ms remaining
@@ -86,6 +95,49 @@ export default function Shop({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logTerminalEndRef = useRef<HTMLDivElement>(null);
+
+  // Promo code redemption state
+  const [promoCode, setPromoCode] = useState('');
+  const [isRedeeming, setIsRedeeming] = useState(false);
+  const [redeemMessage, setRedeemMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
+
+  const handleRedeemCode = async () => {
+    if (!isLoggedIn) {
+      showNotice('Please log in or guest play first to redeem promo codes.', 'error');
+      return;
+    }
+    if (!promoCode.trim()) return;
+
+    setIsRedeeming(true);
+    setRedeemMessage(null);
+
+    try {
+      const res = await fetch('/api/shop/redeem', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: nickname,
+          code: promoCode.toUpperCase().trim()
+        })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setPoints(data.newPoints);
+        setRedeemMessage({ text: data.message || 'Successfully redeemed code!', type: 'success' });
+        setPromoCode('');
+        showNotice(`Code redeemed! +${data.rewardAmount} AP.`, 'success');
+      } else {
+        setRedeemMessage({ text: data.error || 'Failed to redeem code.', type: 'error' });
+      }
+    } catch (err: any) {
+      setRedeemMessage({ text: err.message || 'Error occurred during redemption.', type: 'error' });
+    } finally {
+      setIsRedeeming(false);
+    }
+  };
 
   // --- TIME COOLDOWN HOOKS ---
   useEffect(() => {
@@ -163,7 +215,14 @@ export default function Shop({
         body: JSON.stringify({ name: nickname, points })
       });
 
-      const data = await res.json();
+      let data: any = {};
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned status ${res.status}`);
+      }
 
       if (!res.ok) {
         throw new Error(data.error || 'Failed to claim reward');
@@ -174,7 +233,7 @@ export default function Shop({
       setClaimSuccessMessage(`Claimed successfully! You earned +${data.rewardAmount} Aura Points 🌟`);
     } catch (err: any) {
       console.error(err);
-      alert(err.message || 'Error claiming daily reward.');
+      showNotice(err.message || 'Error claiming daily reward.', 'error');
     } finally {
       setIsClaiming(false);
     }
@@ -197,11 +256,11 @@ export default function Shop({
 
   const processUploadedFile = (file: File) => {
     if (!file.type.startsWith('image/')) {
-      alert('Please upload an image file (PNG, JPG, SVG).');
+      showNotice('Please upload an image file (PNG, JPG, SVG).', 'error');
       return;
     }
     if (file.size > 1 * 1024 * 1024) {
-      alert('File is too large! Please select an image under 1MB.');
+      showNotice('File is too large! Please select an image under 1MB.', 'error');
       return;
     }
 
@@ -222,16 +281,14 @@ export default function Shop({
     }
     const cost = 100;
     if (points < cost) {
-      alert('Insufficient Aura Points!');
+      showNotice('Insufficient Aura Points!', 'error');
       return;
     }
 
-    if (window.confirm(`Exchange ${cost} Aura Points to unlock the "${hex}" username style?`)) {
-      setPoints(p => p - cost);
-      setUnlockedColor(hex);
-      localStorage.setItem('aurlets_unlocked_color', hex);
-      alert('Username style successfully unlocked! Applied to your profile.');
-    }
+    setPoints(p => p - cost);
+    setUnlockedColor(hex);
+    localStorage.setItem('aurlets_unlocked_color', hex);
+    showNotice(`Username style successfully unlocked and applied to your profile!`, 'success');
   };
 
   const purchaseAvatarFrame = () => {
@@ -241,16 +298,14 @@ export default function Shop({
     }
     const cost = 150;
     if (points < cost) {
-      alert('Insufficient Aura Points!');
+      showNotice('Insufficient Aura Points!', 'error');
       return;
     }
 
-    if (window.confirm(`Exchange ${cost} Aura Points to unlock the Radiant Aura Profile Frame?`)) {
-      setPoints(p => p - cost);
-      setUnlockedFrame(true);
-      localStorage.setItem('aurlets_unlocked_frame', 'true');
-      alert('Radiant Profile Frame unlocked! Admire your glowing border.');
-    }
+    setPoints(p => p - cost);
+    setUnlockedFrame(true);
+    localStorage.setItem('aurlets_unlocked_frame', 'true');
+    showNotice('Radiant Profile Frame unlocked and applied! Admire your glowing border.', 'success');
   };
 
   // --- PURCHASE CUSTOM DISCORD ROLE ---
@@ -261,12 +316,12 @@ export default function Shop({
       return;
     }
     if (!roleName.trim()) {
-      alert('Please input a role name first.');
+      showNotice('Please input a role name first.', 'error');
       return;
     }
     const cost = 350;
     if (points < cost) {
-      alert('Insufficient points to buy a custom role.');
+      showNotice('Insufficient points to buy a custom role.', 'error');
       return;
     }
 
@@ -289,7 +344,15 @@ export default function Shop({
         })
       });
 
-      const data = await res.json();
+      let data: any = {};
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned status ${res.status}`);
+      }
+
       if (!res.ok) {
         throw new Error(data.error || 'Server rejected purchase');
       }
@@ -324,6 +387,26 @@ export default function Shop({
           Exchange your hard-earned Aura Points (AP) for premium digital features, custom profiles, and custom Discord server roles!
         </p>
       </div>
+
+      {/* Global Notifications Toast/Banner */}
+      <AnimatePresence>
+        {shopNotification && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -10 }}
+            className={`p-4 rounded-xl border text-xs font-bold text-center ${
+              shopNotification.type === 'success'
+                ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300'
+                : shopNotification.type === 'error'
+                  ? 'bg-rose-500/10 border-rose-500/20 text-rose-300'
+                  : 'bg-zinc-800/80 border-zinc-700 text-zinc-300'
+            }`}
+          >
+            {shopNotification.message}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Tabs Switcher & Points Monitor */}
       <div className="flex flex-col md:flex-row gap-4 justify-between items-center bg-zinc-900/20 p-4 border border-zinc-900 rounded-2xl">
@@ -417,6 +500,59 @@ export default function Shop({
                     className="mt-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 text-center font-bold"
                   >
                     {claimSuccessMessage}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+
+            {/* REDEEM PROMO CODE CARD */}
+            <motion.div
+              layout
+              className="p-6 rounded-2xl bg-zinc-950/60 border border-zinc-900/80 space-y-4 relative overflow-hidden"
+            >
+              <div className="absolute top-0 right-0 w-24 h-24 bg-pink-500/5 rounded-full blur-2xl pointer-events-none" />
+              
+              <div className="flex items-center gap-3">
+                <span className="p-2 bg-pink-500/10 border border-pink-500/20 text-pink-400 rounded-xl">
+                  <Gift className="w-4 h-4" />
+                </span>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Redeem Promo Code</h3>
+                  <p className="text-[11px] text-zinc-500">Claim your free Aura Points (AP) voucher codes generated by admins!</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="ENTER PROMO CODE (e.g. AURLETS100)"
+                  value={promoCode}
+                  onChange={(e) => setPromoCode(e.target.value.toUpperCase())}
+                  disabled={isRedeeming}
+                  className="flex-1 px-4 py-2.5 bg-zinc-900 border border-zinc-850 rounded-xl focus:border-pink-500 focus:outline-none text-xs font-mono text-white placeholder-zinc-600 uppercase"
+                />
+                <button
+                  onClick={handleRedeemCode}
+                  disabled={isRedeeming || !promoCode.trim()}
+                  className="px-5 py-2.5 bg-pink-600 hover:bg-pink-500 disabled:opacity-50 disabled:pointer-events-none text-white text-xs font-bold rounded-xl transition-all uppercase font-mono shrink-0"
+                >
+                  {isRedeeming ? 'Redeeming...' : 'Redeem'}
+                </button>
+              </div>
+
+              <AnimatePresence>
+                {redeemMessage && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 5 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0 }}
+                    className={`p-3 rounded-xl text-xs font-bold text-center ${
+                      redeemMessage.type === 'success'
+                        ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+                        : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
+                    }`}
+                  >
+                    {redeemMessage.text}
                   </motion.div>
                 )}
               </AnimatePresence>

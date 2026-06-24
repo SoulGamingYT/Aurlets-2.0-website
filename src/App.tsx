@@ -15,7 +15,8 @@ import {
   LogOut,
   User as UserIcon,
   Coins,
-  ShoppingBag
+  ShoppingBag,
+  UserCheck
 } from 'lucide-react';
 
 // Custom sub-components
@@ -28,6 +29,7 @@ import AuraGames from './components/AuraGames';
 import AFKFarming from './components/AFKFarming';
 import EidGift from './components/EidGift';
 import Shop from './components/Shop';
+import AdminPanel from './components/AdminPanel';
 import { DiscordIcon } from './components/Icons';
 import AuthModal from './components/AuthModal';
 
@@ -72,12 +74,36 @@ export default function App() {
   // Sync Discord configuration status from the backend
   useEffect(() => {
     fetch('/api/auth/discord/config')
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error('Failed to load Discord config');
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          return res.json();
+        }
+        throw new Error('Response is not JSON');
+      })
       .then((data) => {
         setDiscordConfigured(data.configured);
       })
       .catch((err) => console.error('Error fetching Discord config:', err));
   }, []);
+
+  // Periodically and on active tab changes sync user points from server
+  useEffect(() => {
+    if (isLoggedIn && nickname) {
+      fetch(`/api/user/sync?name=${encodeURIComponent(nickname)}`)
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error('Sync failed');
+        })
+        .then(data => {
+          if (typeof data.points === 'number') {
+            setPoints(data.points);
+          }
+        })
+        .catch(err => console.error('Error syncing points:', err));
+    }
+  }, [nickname, isLoggedIn, activeTab]);
 
   // Listen for successful Discord Auth postMessage from the popup callback
   useEffect(() => {
@@ -108,6 +134,11 @@ export default function App() {
       if (!response.ok) {
         throw new Error('Failed to get Discord authorization URL');
       }
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        throw new Error(text || 'Response was not JSON');
+      }
       const { url } = await response.json();
 
       // Open a popup for Discord authorize
@@ -123,11 +154,10 @@ export default function App() {
       );
 
       if (!authWindow) {
-        alert('Popup was blocked! Please enable popups for this site to login via Discord.');
+        console.warn('Popup was blocked! Please enable popups for this site to login via Discord.');
       }
     } catch (err) {
       console.error('Discord login initiation error:', err);
-      alert('Could not start Discord login. Please check configuration.');
     }
   };
 
@@ -135,14 +165,6 @@ export default function App() {
     setDiscordUser(null);
     setNickname(name);
     setAvatarUrl(avatar);
-    setIsLoggedIn(true);
-    setShowAuthModal(false);
-  };
-
-  const handleSimulateDiscord = (simUser: { id: string; username: string; globalName: string; avatarUrl: string }) => {
-    setDiscordUser(simUser);
-    setNickname(simUser.globalName);
-    setAvatarUrl(simUser.avatarUrl);
     setIsLoggedIn(true);
     setShowAuthModal(false);
   };
@@ -165,6 +187,8 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activeTab]);
 
+  const isAdmin = discordUser?.id === '840560998011502593' || (!discordConfigured && nickname.toLowerCase() === 'admin');
+
   const navItems = [
     { id: 'home', label: 'Home', icon: HomeIcon },
     { id: 'info', label: 'Info', icon: InfoIcon },
@@ -174,7 +198,8 @@ export default function App() {
     { id: 'games', label: 'AuraGames', icon: Gamepad2 },
     { id: 'afk', label: 'AFK Farming', icon: Flame },
     { id: 'shop', label: 'Reward Shop 🛒', icon: ShoppingBag },
-    { id: 'gift', label: 'Eid Gift 🌙', icon: Gift }
+    { id: 'gift', label: 'Eid Gift 🌙', icon: Gift },
+    ...(isAdmin ? [{ id: 'admin', label: 'Admin Panel ⚙️', icon: UserCheck }] : [])
   ];
 
   const renderActiveContent = () => {
@@ -224,6 +249,17 @@ export default function App() {
         );
       case 'gift':
         return <EidGift />;
+      case 'admin':
+        return isAdmin ? (
+          <AdminPanel
+            adminDiscordId={discordUser?.id || ''}
+            adminUsername={nickname}
+            discordConfigured={discordConfigured}
+            onPointsUpdated={(newPts) => setPoints(newPts)}
+          />
+        ) : (
+          <Home onNavigate={(tab) => setActiveTab(tab)} />
+        );
       default:
         return <Home onNavigate={(tab) => setActiveTab(tab)} />;
     }
@@ -454,7 +490,6 @@ export default function App() {
             onClose={() => setShowAuthModal(false)}
             onDiscordLogin={handleDiscordLogin}
             onCustomLogin={handleCustomLogin}
-            onSimulateDiscord={handleSimulateDiscord}
             discordConfigured={discordConfigured}
           />
         )}

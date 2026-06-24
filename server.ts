@@ -41,6 +41,23 @@ async function startServer() {
     icon: string;
     createdAt: number;
   }> = [];
+  let redeemCodes: Record<string, {
+    code: string;
+    rewardAmount: number;
+    maxUses: number;
+    uses: number;
+    redeemedBy: string[];
+    createdAt: number;
+  }> = {
+    'AURLETS100': {
+      code: 'AURLETS100',
+      rewardAmount: 100,
+      maxUses: 100,
+      uses: 0,
+      redeemedBy: [],
+      createdAt: Date.now()
+    }
+  };
 
   // --- MATHS GAME STATE ---
   let mathPlaying = false;
@@ -532,6 +549,173 @@ async function startServer() {
   // 3. Fetch Custom Roles list
   app.get('/api/shop/roles', (req, res) => {
     res.json(customRoles);
+  });
+
+  // --- ADMIN HELPER ---
+  const isRequestAdmin = (req: express.Request): boolean => {
+    const discordId = req.headers['x-admin-discord-id'] || req.body?.adminDiscordId || req.query?.adminDiscordId;
+    const adminName = req.headers['x-admin-username'] || req.body?.adminUsername || req.query?.adminUsername;
+    
+    if (discordId === '840560998011502593') {
+      return true;
+    }
+    
+    const discordConfigured = !!(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET);
+    if (!discordConfigured && adminName === 'admin') {
+      return true;
+    }
+    
+    return false;
+  };
+
+  // --- POINT SYNC ENDPOINT ---
+  app.get('/api/user/sync', (req, res) => {
+    const { name } = req.query;
+    if (!name) {
+      return res.status(400).json({ error: 'Name is required' });
+    }
+    const farmer = farmers[name as string];
+    res.json({ points: farmer ? farmer.points : 0 });
+  });
+
+  // --- REDEEM PROMO CODE ENDPOINT ---
+  app.post('/api/shop/redeem', (req, res) => {
+    const { name, code } = req.body;
+    if (!name || !code) {
+      return res.status(400).json({ error: 'Name and code are required.' });
+    }
+
+    const cleanCode = code.toUpperCase().trim();
+    const codeItem = redeemCodes[cleanCode];
+
+    if (!codeItem) {
+      return res.status(400).json({ error: 'Invalid or expired redeem code!' });
+    }
+
+    if (codeItem.uses >= codeItem.maxUses) {
+      return res.status(400).json({ error: 'This redeem code has reached its maximum usage limit!' });
+    }
+
+    if (codeItem.redeemedBy.includes(name)) {
+      return res.status(400).json({ error: 'You have already redeemed this code!' });
+    }
+
+    // Process redemption
+    codeItem.uses += 1;
+    codeItem.redeemedBy.push(name);
+
+    if (farmers[name]) {
+      farmers[name].points = (farmers[name].points || 0) + codeItem.rewardAmount;
+    } else {
+      farmers[name] = {
+        name,
+        points: codeItem.rewardAmount,
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: Date.now()
+      };
+    }
+
+    res.json({
+      success: true,
+      rewardAmount: codeItem.rewardAmount,
+      newPoints: farmers[name].points,
+      message: `Successfully redeemed! Gained +${codeItem.rewardAmount} Aura Points.`
+    });
+  });
+
+  // --- ADMIN ENDPOINTS (SECURED) ---
+  app.get('/api/admin/users', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const list = Object.values(farmers).map(f => ({
+      name: f.name,
+      points: f.points,
+      avatarUrl: f.avatarUrl
+    })).sort((a, b) => b.points - a.points);
+    res.json(list);
+  });
+
+  app.post('/api/admin/user/points', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { name, points, action } = req.body;
+    if (!name || points === undefined) {
+      return res.status(400).json({ error: 'Name and points values are required.' });
+    }
+
+    if (!farmers[name]) {
+      farmers[name] = {
+        name,
+        points: 0,
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: Date.now()
+      };
+    }
+
+    const currentPoints = farmers[name].points || 0;
+    let newPoints = currentPoints;
+
+    if (action === 'add') {
+      newPoints = currentPoints + points;
+    } else if (action === 'subtract') {
+      newPoints = Math.max(0, currentPoints - points);
+    } else if (action === 'set') {
+      newPoints = Math.max(0, points);
+    }
+
+    farmers[name].points = newPoints;
+    res.json({ success: true, name, newPoints });
+  });
+
+  app.get('/api/admin/codes', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    res.json(Object.values(redeemCodes));
+  });
+
+  app.post('/api/admin/codes/generate', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { code, rewardAmount, maxUses } = req.body;
+    if (!code || !rewardAmount || !maxUses) {
+      return res.status(400).json({ error: 'Missing code details.' });
+    }
+
+    const cleanCode = code.toUpperCase().trim();
+    if (redeemCodes[cleanCode]) {
+      return res.status(400).json({ error: 'A code with this name already exists!' });
+    }
+
+    redeemCodes[cleanCode] = {
+      code: cleanCode,
+      rewardAmount: parseInt(rewardAmount),
+      maxUses: parseInt(maxUses),
+      uses: 0,
+      redeemedBy: [],
+      createdAt: Date.now()
+    };
+
+    res.json({ success: true, code: cleanCode });
+  });
+
+  app.post('/api/admin/codes/delete', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { code } = req.body;
+    if (!code) {
+      return res.status(400).json({ error: 'Code is required.' });
+    }
+    const cleanCode = code.toUpperCase().trim();
+    if (redeemCodes[cleanCode]) {
+      delete redeemCodes[cleanCode];
+      return res.json({ success: true });
+    }
+    res.status(400).json({ error: 'Code not found.' });
   });
 
   // --- DISCORD OAUTH ENDPOINTS ---

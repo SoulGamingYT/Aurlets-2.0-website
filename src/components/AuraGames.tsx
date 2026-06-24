@@ -57,6 +57,7 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
   const [kotdPlaying, setKotdPlaying] = useState<boolean>(false);
   const [kotdUsername, setKotdUsername] = useState<string>(playerName);
   const [kotdUserAns, setKotdUserAns] = useState<string>('');
+  const [kotdError, setKotdError] = useState<string>('');
   const [kotdLobbyJoined, setKotdLobbyJoined] = useState<boolean>(false);
   const [kotdTimeLeft, setKotdTimeLeft] = useState<number>(30);
   const [kotdPlayers, setKotdPlayers] = useState<any[]>([]);
@@ -85,19 +86,22 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
         });
         const res = await fetch(`/api/game/state?${query.toString()}`);
         if (res.ok) {
-          const data = await res.json();
-          if (activeGame === 'math') {
-            setMathPlaying(data.math.playing);
-            setMathQuestion(data.math.question);
-            setMathTimeLeft(data.math.timeLeft);
-            setMathPlayers(data.math.players);
-            setMathLogs(data.math.logs);
-          } else if (activeGame === 'kotd') {
-            setKotdPlaying(data.kotd.playing);
-            setKotdRound(data.kotd.round);
-            setKotdTimeLeft(data.kotd.timeLeft);
-            setKotdPlayers(data.kotd.players);
-            setKotdLogs(data.kotd.logs);
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            if (activeGame === 'math') {
+              setMathPlaying(data.math.playing);
+              setMathQuestion(data.math.question);
+              setMathTimeLeft(data.math.timeLeft);
+              setMathPlayers(data.math.players);
+              setMathLogs(data.math.logs);
+            } else if (activeGame === 'kotd') {
+              setKotdPlaying(data.kotd.playing);
+              setKotdRound(data.kotd.round);
+              setKotdTimeLeft(data.kotd.timeLeft);
+              setKotdPlayers(data.kotd.players);
+              setKotdLogs(data.kotd.logs);
+            }
           }
         }
       } catch (err) {
@@ -175,9 +179,10 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
     if (!kotdUserAns.trim() || !kotdPlaying) return;
     const num = parseFloat(kotdUserAns);
     if (isNaN(num) || num < 0 || num > 100) {
-      alert('Please enter a valid number between 0 and 100');
+      setKotdError('Please enter a valid number between 0 and 100');
       return;
     }
+    setKotdError('');
     try {
       await fetch('/api/game/submit', {
         method: 'POST',
@@ -448,7 +453,10 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
                         min="0"
                         max="100"
                         value={kotdUserAns}
-                        onChange={(e) => setKotdUserAns(e.target.value)}
+                        onChange={(e) => {
+                          setKotdUserAns(e.target.value);
+                          if (kotdError) setKotdError('');
+                        }}
                         placeholder="e.g. 42"
                         className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono focus:outline-none focus:border-pink-500 text-center"
                         onKeyDown={(e) => e.key === 'Enter' && submitKotdNumber()}
@@ -460,6 +468,12 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
                         Submit Value
                       </button>
                     </div>
+
+                    {kotdError && (
+                      <div className="text-rose-400 font-mono text-[10px] text-center pt-1 animate-pulse">
+                        ⚠️ {kotdError}
+                      </div>
+                    )}
 
                     <button
                       onClick={stopKotdGame}
