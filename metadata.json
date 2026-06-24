@@ -1,0 +1,6 @@
+{
+  "name": "Aurlets Website",
+  "description": "Official community website for Aurlets Discord Server featuring server stats, announcements, interactive multiplayer mini-games, staff list, personal Eid letters, and AFK farming.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
