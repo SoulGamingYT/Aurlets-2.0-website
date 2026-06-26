@@ -219,6 +219,15 @@ export default function AuthModal({
 
               <div className="bg-zinc-950 p-3 rounded-lg border border-zinc-900 space-y-2 font-mono text-[10px]">
                 <div className="space-y-1">
+                  <div className="text-emerald-400 font-bold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    YOUR ACTIVE APP REDIRECT (USE THIS FOR PUBLISHED APP):
+                  </div>
+                  <div className="text-emerald-300 break-all bg-emerald-950/40 p-2 rounded border border-emerald-900/30 select-all font-semibold">
+                    {window.location.origin}/api/auth/discord/callback
+                  </div>
+                </div>
+                <div className="space-y-1 pt-1 border-t border-zinc-900">
                   <div className="text-zinc-500 font-bold">DEV APP REDIRECT:</div>
                   <div className="text-purple-300 break-all bg-zinc-900/80 p-1.5 rounded border border-zinc-800 select-all">
                     https://ais-dev-mi5isjwmxcwzz2wnkckp6y-950813206559.asia-east1.run.app/api/auth/discord/callback

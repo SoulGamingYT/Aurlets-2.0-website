@@ -4,6 +4,43 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Aurlets – The Aura Farmers</title>
+    <script>
+      (function() {
+        try {
+          var originalFetch = window.fetch;
+          Object.defineProperty(window, 'fetch', {
+            get: function() {
+              return originalFetch;
+            },
+            set: function(newFetch) {
+              originalFetch = newFetch;
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {
+          console.warn('Unable to redefine window.fetch. Attempting fallback proxy for global.', e);
+        }
+
+        try {
+          var globalObject = typeof window !== 'undefined' ? window : typeof globalThis !== 'undefined' ? globalThis : {};
+          if (!window.global) {
+            window.global = new Proxy(globalObject, {
+              set: function(target, prop, value) {
+                if (prop === 'fetch') {
+                  console.warn('Prevented write to read-only fetch property');
+                  return true;
+                }
+                target[prop] = value;
+                return true;
+              }
+            });
+          }
+        } catch (e) {
+          console.error('Failed to set up global proxy:', e);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

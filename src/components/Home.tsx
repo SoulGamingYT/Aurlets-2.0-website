@@ -1,6 +1,7 @@
 import { motion } from 'motion/react';
 import { DiscordIcon } from './Icons'; // custom discord icon helper
 import { Flame, Shield, Users, MessageSquare, Gamepad2, Sparkles, TrendingUp, Music } from 'lucide-react';
+import { Tooltip } from './Tooltip';
 
 interface HomeProps {
   onJoinDiscord?: () => void;
@@ -27,6 +28,16 @@ export default function Home({ onNavigate }: HomeProps) {
           transition={{ duration: 0.6 }}
           className="relative z-10 space-y-6 max-w-3xl mx-auto"
         >
+          <div className="flex justify-center pb-2">
+            <div className="w-24 h-24 rounded-3xl overflow-hidden bg-gradient-to-tr from-purple-600 to-pink-600 flex items-center justify-center shadow-2xl shadow-purple-500/20 border border-zinc-850">
+              <img 
+                src="https://i.postimg.cc/DZF2WXYD/aurlets.webp" 
+                alt="Aurlets Logo" 
+                className="w-full h-full object-cover"
+              />
+            </div>
+          </div>
+
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-purple-400 font-mono tracking-widest uppercase">
             <Sparkles className="w-3.5 h-3.5 animate-pulse" /> Grow Your Aura With Us
           </div>
@@ -44,21 +55,26 @@ export default function Home({ onNavigate }: HomeProps) {
           </p>
 
           <div className="flex flex-wrap justify-center gap-4 pt-4">
-            <a
-              href="https://discord.gg/aurlets"
-              target="_blank"
-              rel="noreferrer"
-              className="px-8 py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition-all shadow-lg hover:shadow-indigo-500/20 active:scale-95 flex items-center gap-3 group"
-            >
-              <DiscordIcon className="w-5 h-5 fill-white transition-transform group-hover:scale-110" />
-              Join Our Discord
-            </a>
-            <button
-              onClick={() => onNavigate('info')}
-              className="px-8 py-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 font-semibold transition-all active:scale-95"
-            >
-              Learn More
-            </button>
+            <Tooltip content="Connect directly with thousands of members on Discord" position="top">
+              <a
+                href="https://discord.gg/aurlets"
+                target="_blank"
+                rel="noreferrer"
+                className="px-8 py-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition-all shadow-lg hover:shadow-indigo-500/20 active:scale-95 flex items-center gap-3 group"
+              >
+                <DiscordIcon className="w-5 h-5 fill-white transition-transform group-hover:scale-110" />
+                Join Our Discord
+              </a>
+            </Tooltip>
+            
+            <Tooltip content="Discover what makes the Aurlets community unique" position="top">
+              <button
+                onClick={() => onNavigate('info')}
+                className="px-8 py-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white border border-zinc-800 hover:border-zinc-700 font-semibold transition-all active:scale-95"
+              >
+                Learn More
+              </button>
+            </Tooltip>
           </div>
         </motion.div>
       </div>
@@ -121,15 +137,16 @@ export default function Home({ onNavigate }: HomeProps) {
             <span className="text-zinc-400 text-sm font-semibold uppercase font-mono">Connect on:</span>
             <div className="flex flex-wrap gap-3">
               {socialLinks.map((link) => (
-                <a
-                  key={link.name}
-                  href={link.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={`px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium hover:text-white hover:bg-zinc-800 transition-all text-sm ${link.color}`}
-                >
-                  {link.name}
-                </a>
+                <Tooltip key={link.name} content={`Follow us on ${link.name}`} position="top">
+                  <a
+                    href={link.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`px-4 py-2 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300 font-medium hover:text-white hover:bg-zinc-800 transition-all text-sm ${link.color}`}
+                  >
+                    {link.name}
+                  </a>
+                </Tooltip>
               ))}
             </div>
           </div>

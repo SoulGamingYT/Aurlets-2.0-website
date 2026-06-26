@@ -11,7 +11,10 @@ import {
   Award, 
   CheckCircle, 
   AlertTriangle,
-  UserCheck
+  UserCheck,
+  Database,
+  Download,
+  Upload
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -36,13 +39,29 @@ interface RedeemCode {
   createdAt: number;
 }
 
+export interface AuditReport {
+  timestamp: number;
+  totalUsers: number;
+  totalPoints: number;
+  unusuallyHighEarners: Array<{ username: string; points: number }>;
+  userPointsSnapshot: Record<string, number>;
+  changes: Array<{ username: string; oldPoints: number; newPoints: number; diff: number }>;
+}
+
 export default function AdminPanel({
   adminDiscordId,
   adminUsername,
   discordConfigured,
   onPointsUpdated
 }: AdminPanelProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes'>('users');
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup'>('users');
+  
+  // States for Backup/Restore system
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [backupStats, setBackupStats] = useState<{ usersCount: number; customRolesCount: number; redeemCodesCount: number; exportedAt: number } | null>(null);
   
   // States for User Management
   const [users, setUsers] = useState<Farmer[]>([]);
@@ -56,6 +75,12 @@ export default function AdminPanel({
   const [newCodeName, setNewCodeName] = useState('');
   const [newCodeReward, setNewCodeReward] = useState('100');
   const [newCodeMaxUses, setNewCodeMaxUses] = useState('50');
+
+  // States for Points Audit
+  const [auditReports, setAuditReports] = useState<AuditReport[]>([]);
+  const [lastAuditTimestamp, setLastAuditTimestamp] = useState<number | null>(null);
+  const [isLoadingAudit, setIsLoadingAudit] = useState(false);
+  const [isTriggeringAudit, setIsTriggeringAudit] = useState(false);
 
   // General feedback notice
   const [notice, setNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -114,9 +139,60 @@ export default function AdminPanel({
     }
   };
 
+  const fetchAuditReports = async () => {
+    setIsLoadingAudit(true);
+    try {
+      const res = await fetch('/api/admin/audit-reports', {
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAuditReports(data.auditReports || []);
+        setLastAuditTimestamp(data.lastAuditTimestamp || null);
+      } else {
+        const err = await res.text();
+        console.error('Failed to load audit reports:', err);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsLoadingAudit(false);
+    }
+  };
+
+  const triggerManualAudit = async () => {
+    setIsTriggeringAudit(true);
+    try {
+      const res = await fetch('/api/admin/audit-reports/run', {
+        method: 'POST',
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAuditReports(data.auditReports || []);
+        setLastAuditTimestamp(data.lastAuditTimestamp || null);
+        showNotice('Audit check run successfully and logs generated!', 'success');
+      } else {
+        const err = await res.text();
+        showNotice(`Failed to run audit check: ${err}`, 'error');
+      }
+    } catch (err: any) {
+      showNotice(`Audit check error: ${err.message || err}`, 'error');
+    } finally {
+      setIsTriggeringAudit(false);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
     fetchCodes();
+    fetchAuditReports();
   }, [adminDiscordId, adminUsername]);
 
   // --- ACTIONS ---
@@ -243,6 +319,82 @@ export default function AdminPanel({
     }
   };
 
+  const handleExportBackup = async () => {
+    setIsExporting(true);
+    try {
+      const res = await fetch('/api/admin/backup/export', {
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (!res.ok) {
+        throw new Error(await res.text());
+      }
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '_');
+      a.download = `aurlets_progress_${dateStr}.aurlets`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showNotice('Website progress successfully exported as .aurlets file!', 'success');
+    } catch (err: any) {
+      showNotice(err.message || 'Failed to export backup.', 'error');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleImportBackup = async (file: File) => {
+    setIsImporting(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const content = e.target?.result as string;
+          const res = await fetch('/api/admin/backup/import', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-admin-discord-id': adminDiscordId,
+              'x-admin-username': adminUsername
+            },
+            body: JSON.stringify({ fileContent: content })
+          });
+          const data = await res.json();
+          if (res.ok) {
+            showNotice('Website progress restored successfully!', 'success');
+            setBackupStats({
+              usersCount: data.stats.usersCount,
+              customRolesCount: data.stats.customRolesCount,
+              redeemCodesCount: data.stats.redeemCodesCount,
+              exportedAt: data.stats.exportedAt
+            });
+            // Force sync
+            fetchUsers();
+            fetchCodes();
+            fetchAuditReports();
+          } else {
+            showNotice(data.error || 'Failed to import backup.', 'error');
+          }
+        } catch (err: any) {
+          showNotice(err.message || 'Error parsing uploaded file.', 'error');
+        } finally {
+          setIsImporting(false);
+        }
+      };
+      reader.readAsText(file);
+    } catch (err: any) {
+      showNotice(err.message || 'Failed to read backup file.', 'error');
+      setIsImporting(false);
+    }
+  };
+
   // Filtered Users List
   const filteredUsers = users.filter(u => 
     u.name.toLowerCase().includes(searchQuery.toLowerCase())
@@ -281,10 +433,10 @@ export default function AdminPanel({
 
       {/* Sub Tabs Switcher */}
       <div className="flex flex-col sm:flex-row gap-4 justify-between items-center bg-zinc-900/20 p-4 border border-zinc-900 rounded-2xl">
-        <div className="flex gap-2 w-full sm:w-auto">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
           <button
             onClick={() => setActiveSubTab('users')}
-            className={`flex-1 sm:flex-none px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
               activeSubTab === 'users'
                 ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
                 : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
@@ -294,13 +446,36 @@ export default function AdminPanel({
           </button>
           <button
             onClick={() => setActiveSubTab('codes')}
-            className={`flex-1 sm:flex-none px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
               activeSubTab === 'codes'
                 ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
                 : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
             }`}
           >
             <Gift className="w-4 h-4" /> Redeem Codes Generator ({codes.length})
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('audit');
+              fetchAuditReports();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'audit'
+                ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <TrendingUp className="w-4 h-4" /> Points Audit Logs ({auditReports.length})
+          </button>
+          <button
+            onClick={() => setActiveSubTab('backup')}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'backup'
+                ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <Database className="w-4 h-4" /> Save & Load Progress
           </button>
         </div>
 
@@ -309,6 +484,7 @@ export default function AdminPanel({
           onClick={() => {
             fetchUsers();
             fetchCodes();
+            fetchAuditReports();
             showNotice('State refreshed with database.', 'success');
           }}
           className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all flex items-center gap-1.5 text-xs font-mono"
@@ -317,7 +493,7 @@ export default function AdminPanel({
         </button>
       </div>
 
-      {activeSubTab === 'users' ? (
+      {activeSubTab === 'users' && (
         /* USER AND POINTS MANAGER VIEW */
         <div className="space-y-6">
           <div className="flex flex-col md:flex-row gap-4 justify-between">
@@ -433,7 +609,8 @@ export default function AdminPanel({
             )}
           </div>
         </div>
-      ) : (
+      )}
+      {activeSubTab === 'codes' && (
         /* PROMO CODES MANAGER VIEW */
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Create Code Panel */}
@@ -553,6 +730,292 @@ export default function AdminPanel({
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'audit' && (
+        /* POINTS AUDIT LOGS VIEW */
+        <div className="space-y-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-900/10 p-4 border border-zinc-900 rounded-2xl">
+            <div>
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-pink-500 animate-pulse" /> Points Growth Audit
+              </h3>
+              <p className="text-zinc-500 text-[11px] mt-0.5 max-w-xl">
+                Every 12 hours, points are analyzed to detect glitches, unauthorized modifications, or suspicious loopholes. Suspected exploiters (earning &gt;=1,000 AP) are flagged automatically.
+              </p>
+            </div>
+            
+            <button
+              onClick={triggerManualAudit}
+              disabled={isTriggeringAudit}
+              className="px-4 py-2.5 bg-pink-600 hover:bg-pink-500 disabled:bg-zinc-800 text-white text-xs font-bold rounded-xl transition-all flex items-center gap-2 active:scale-95 shrink-0 self-stretch sm:self-auto justify-center"
+            >
+              {isTriggeringAudit ? (
+                <span className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+              ) : (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5" /> Force Audit Scan
+                </>
+              )}
+            </button>
+          </div>
+
+          {isLoadingAudit ? (
+            <div className="p-12 text-center text-xs font-mono text-zinc-500 animate-pulse">
+              Compiling points history records...
+            </div>
+          ) : auditReports.length === 0 ? (
+            <div className="p-12 border border-zinc-900 rounded-2xl bg-zinc-950/20 text-center text-xs text-zinc-500 font-mono">
+              No audit records generated yet. Click "Force Audit Scan" to compile the first report!
+            </div>
+          ) : (
+            <div className="space-y-6">
+              {[...auditReports].reverse().map((report, idx) => {
+                const dateStr = new Date(report.timestamp).toLocaleString();
+                return (
+                  <div key={idx} className="p-5 border border-zinc-900 bg-zinc-950/40 rounded-2xl space-y-4">
+                    <div className="flex flex-col sm:flex-row justify-between border-b border-zinc-900/60 pb-3 gap-2">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-2.5 h-2.5 rounded-full bg-pink-500 animate-pulse" />
+                        <div>
+                          <div className="text-xs font-bold text-white">Audit Report #{auditReports.length - idx}</div>
+                          <div className="text-[10px] text-zinc-500 font-mono">{dateStr}</div>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-4 text-[11px] font-mono">
+                        <div>
+                          <span className="text-zinc-500">Registered Users:</span>{' '}
+                          <span className="text-white font-bold">{report.totalUsers}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500">Aura Points Pool:</span>{' '}
+                          <span className="text-pink-400 font-bold">{report.totalPoints} AP</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Suspicious earners warning */}
+                    {report.unusuallyHighEarners && report.unusuallyHighEarners.length > 0 ? (
+                      <div className="p-3 bg-rose-950/20 border border-rose-900/30 rounded-xl space-y-1.5 text-xs">
+                        <div className="flex items-center gap-2 text-rose-400 font-bold">
+                          <AlertTriangle className="w-4 h-4 shrink-0" />
+                          <span>Flagged Suspicious Earnings (&gt;=1000 AP in 12h)</span>
+                        </div>
+                        <ul className="list-disc list-inside text-rose-300 pl-1 space-y-0.5">
+                          {report.unusuallyHighEarners.map((earner, earnerIdx) => (
+                            <li key={earnerIdx}>
+                              Player <span className="font-bold underline">{earner.username}</span> earned{' '}
+                              <span className="font-mono font-bold">+{earner.points} AP</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-emerald-950/10 border border-emerald-900/20 text-emerald-400 rounded-xl text-xs flex items-center gap-2 font-mono">
+                        <CheckCircle className="w-4 h-4" />
+                        <span>No suspicious points growth or anomalies detected. System is secure.</span>
+                      </div>
+                    )}
+
+                    {/* Normal growth changes */}
+                    <div>
+                      <h4 className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider mb-2 font-mono">
+                        Points Activity Summary
+                      </h4>
+                      {report.changes.length === 0 ? (
+                        <p className="text-[10px] text-zinc-600 italic font-mono">No active point transactions or earnings occurred during this window.</p>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                          {report.changes.map((change, changeIdx) => (
+                            <div
+                              key={changeIdx}
+                              className="px-3 py-2.5 bg-zinc-900/40 border border-zinc-900/50 rounded-xl flex items-center justify-between text-xs font-mono"
+                            >
+                              <span className="text-zinc-300 font-bold truncate max-w-[120px]">{change.username}</span>
+                              <div className="text-right">
+                                <span className="text-pink-400 font-bold">+{change.diff} AP</span>
+                                <div className="text-[9px] text-zinc-500">
+                                  {change.oldPoints} ➔ {change.newPoints} AP
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeSubTab === 'backup' && (
+        /* BACKUP & RESTORE VIEW */
+        <div className="space-y-8">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+            {/* Export Panel */}
+            <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-950/40 space-y-6 flex flex-col justify-between">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-xl bg-pink-500/10 flex items-center justify-center border border-pink-500/20 text-pink-500">
+                  <Download className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    Save Website Progress
+                  </h3>
+                  <p className="text-zinc-400 text-xs mt-1">
+                    Export all user points, time spent on website, leaderboard data, generated redeem codes, and custom roles purchased into a special secured backup file (<span className="text-pink-400 font-mono">.aurlets</span>).
+                  </p>
+                </div>
+                <div className="p-3.5 bg-zinc-900/35 border border-zinc-900 rounded-xl space-y-2">
+                  <h4 className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider font-bold">Data Included:</h4>
+                  <ul className="text-xs text-zinc-400 space-y-1 list-disc list-inside">
+                    <li>All player registries ({users.length} users)</li>
+                    <li>Active Promo Codes ({codes.length} codes)</li>
+                    <li>Global and AFK leaderboards</li>
+                    <li>Point growths & system Audit logs</li>
+                  </ul>
+                </div>
+              </div>
+
+              <button
+                onClick={handleExportBackup}
+                disabled={isExporting}
+                className="w-full mt-4 py-3.5 bg-pink-600 hover:bg-pink-500 disabled:bg-zinc-800 text-white font-bold rounded-xl transition-all shadow-lg shadow-pink-600/15 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+              >
+                {isExporting ? (
+                  <span className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    <span>Export Progress File</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Import Panel */}
+            <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-950/40 space-y-6 flex flex-col justify-between">
+              <div className="space-y-3">
+                <div className="w-12 h-12 rounded-xl bg-pink-500/10 flex items-center justify-center border border-pink-500/20 text-pink-500">
+                  <Upload className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    Load Website Progress
+                  </h3>
+                  <p className="text-zinc-400 text-xs mt-1">
+                    Upload a previously saved <span className="text-pink-400 font-mono">.aurlets</span> file to restore all website data, including user progress, settings, and points.
+                  </p>
+                </div>
+
+                {/* Drag and drop area */}
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setDragActive(true);
+                  }}
+                  onDragLeave={() => setDragActive(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragActive(false);
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      setSelectedFile(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  onClick={() => document.getElementById('file-upload-input')?.click()}
+                  className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-2.5 ${
+                    dragActive
+                      ? 'border-pink-500 bg-pink-500/5'
+                      : selectedFile
+                      ? 'border-emerald-500/50 bg-emerald-500/5'
+                      : 'border-zinc-800 hover:border-zinc-700 bg-zinc-900/20'
+                  }`}
+                >
+                  <input
+                    id="file-upload-input"
+                    type="file"
+                    accept=".aurlets"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        setSelectedFile(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  {selectedFile ? (
+                    <>
+                      <CheckCircle className="w-8 h-8 text-emerald-400" />
+                      <div>
+                        <p className="text-xs font-bold text-white truncate max-w-[200px]">{selectedFile.name}</p>
+                        <p className="text-[10px] text-zinc-500 font-mono">{(selectedFile.size / 1024).toFixed(1)} KB</p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-8 h-8 text-zinc-600" />
+                      <div>
+                        <p className="text-xs font-bold text-zinc-300">Drag & drop your .aurlets backup</p>
+                        <p className="text-[10px] text-zinc-500 mt-1">or click to browse from files</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Success feedback state */}
+                {backupStats && (
+                  <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl space-y-1.5 animate-pulse">
+                    <h4 className="text-[10px] font-mono text-emerald-400 uppercase tracking-wider font-bold flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> Import Successful
+                    </h4>
+                    <div className="text-[11px] text-zinc-400 font-mono grid grid-cols-2 gap-y-1">
+                      <span>Restored Users:</span>
+                      <span className="text-white font-bold text-right">{backupStats.usersCount}</span>
+                      <span>Promo Codes:</span>
+                      <span className="text-white font-bold text-right">{backupStats.redeemCodesCount}</span>
+                      <span>Custom Roles:</span>
+                      <span className="text-white font-bold text-right">{backupStats.customRolesCount}</span>
+                      <span>Backup Date:</span>
+                      <span className="text-white font-bold text-right text-[10px]">
+                        {new Date(backupStats.exportedAt).toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-3 mt-4">
+                {selectedFile && (
+                  <button
+                    onClick={() => {
+                      setSelectedFile(null);
+                      setBackupStats(null);
+                    }}
+                    className="flex-1 py-3 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-400 hover:text-zinc-200 text-xs font-bold rounded-xl transition-all"
+                  >
+                    Clear File
+                  </button>
+                )}
+                <button
+                  onClick={() => selectedFile && handleImportBackup(selectedFile)}
+                  disabled={!selectedFile || isImporting}
+                  className="flex-2 py-3 bg-pink-600 hover:bg-pink-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-bold rounded-xl transition-all shadow-lg shadow-pink-600/15 flex items-center justify-center gap-2 text-xs uppercase tracking-wider"
+                >
+                  {isImporting ? (
+                    <span className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin" />
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span>Upload & Restore Data</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

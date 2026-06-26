@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw, AlertCircle, Heart } from 'lucide-react';
+import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw, AlertCircle, Heart, Coins, Sparkles, ArrowLeft, RotateCw, Landmark } from 'lucide-react';
+import { Tooltip } from './Tooltip';
 
 interface GameLog {
   id: string;
@@ -19,9 +20,19 @@ interface AuraGamesProps {
   playerName: string;
   isLoggedIn: boolean;
   onOpenAuthModal: () => void;
+  points?: number;
+  setPoints?: React.Dispatch<React.SetStateAction<number>>;
+  showNotice?: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
 
-export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOpenAuthModal }: AuraGamesProps) {
+export default function AuraGames({ 
+  playerName: propPlayerName, 
+  isLoggedIn, 
+  onOpenAuthModal,
+  points = 0,
+  setPoints,
+  showNotice
+}: AuraGamesProps) {
   const [playerId] = useState(() => {
     let id = localStorage.getItem('aurlets_player_id');
     if (!id) {
@@ -42,7 +53,18 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | null>(null);
+
+  // --- BETTING MINIGAMES STATE ---
+  const [betAmount, setBetAmount] = useState<string>('50');
+  const [coinChoice, setCoinChoice] = useState<'heads' | 'tails'>('heads');
+  const [betHistory, setBetHistory] = useState<{ id: string; game: string; bet: number; result: string; payout: number; won: boolean; time: string }[]>([]);
+  const [isRolling, setIsRolling] = useState<boolean>(false);
+  const [coinResult, setCoinResult] = useState<'heads' | 'tails' | null>(null);
+  const [slotReels, setSlotReels] = useState<string[]>(['🍒', '🍋', '🍇']);
+  const [slotsRolling, setSlotsRolling] = useState<boolean>(false);
+  const [activeCasinoTab, setActiveCasinoTab] = useState<'coinflip' | 'slots'>('coinflip');
+  const [lastWinMessage, setLastWinMessage] = useState<string | null>(null);
 
   // --- MATHS GAME STATE ---
   const [mathPlaying, setMathPlaying] = useState<boolean>(false);
@@ -207,6 +229,150 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
     setActiveGame(null);
   };
 
+  // --- COIN FLIP HANDLER ---
+  const handleCoinFlip = async () => {
+    if (isRolling || slotsRolling) return;
+    if (!isLoggedIn) {
+      onOpenAuthModal();
+      return;
+    }
+
+    const bet = Math.floor(Number(betAmount));
+    if (isNaN(bet) || bet < 5) {
+      showNotice?.('Minimum bet is 5 Aura Points!', 'error');
+      return;
+    }
+
+    if (points < bet) {
+      showNotice?.(`Insufficient balance! You only have ${points} AP.`, 'error');
+      return;
+    }
+
+    setIsRolling(true);
+    setCoinResult(null);
+    setLastWinMessage(null);
+
+    try {
+      const res = await fetch('/api/game/bet/coinflip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName, betAmount: bet, choice: coinChoice })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to complete coinflip.');
+      }
+
+      // Wait 1200ms to allow the flip animation to spin suspensefully
+      setTimeout(() => {
+        setCoinResult(data.result);
+        setIsRolling(false);
+        setPoints?.(data.newPoints);
+        setLastWinMessage(data.message);
+        
+        // Notify
+        showNotice?.(data.message, data.win ? 'success' : 'error');
+
+        // History entry
+        setBetHistory(prev => [
+          {
+            id: 'b_' + Math.random().toString(36).substring(2, 11),
+            game: `Coin Flip (${coinChoice.toUpperCase()})`,
+            bet,
+            result: data.result.toUpperCase(),
+            payout: data.win ? bet * 2 : 0,
+            won: data.win,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          },
+          ...prev
+        ]);
+      }, 1200);
+
+    } catch (err: any) {
+      setIsRolling(false);
+      showNotice?.(err.message || 'Error occurred during coinflip.', 'error');
+    }
+  };
+
+  // --- SLOTS HANDLER ---
+  const handleSpinSlots = async () => {
+    if (isRolling || slotsRolling) return;
+    if (!isLoggedIn) {
+      onOpenAuthModal();
+      return;
+    }
+
+    const bet = Math.floor(Number(betAmount));
+    if (isNaN(bet) || bet < 5) {
+      showNotice?.('Minimum bet is 5 Aura Points!', 'error');
+      return;
+    }
+
+    if (points < bet) {
+      showNotice?.(`Insufficient balance! You only have ${points} AP.`, 'error');
+      return;
+    }
+
+    setSlotsRolling(true);
+    setLastWinMessage(null);
+
+    // Spin reels effect
+    const symbols = ['🍒', '🍋', '🍇', '💎', '👑', '🍉', '🍌', '🍍', '🎰', '🔔', '⭐️', '🍀'];
+    const interval = setInterval(() => {
+      setSlotReels([
+        symbols[Math.floor(Math.random() * symbols.length)],
+        symbols[Math.floor(Math.random() * symbols.length)],
+        symbols[Math.floor(Math.random() * symbols.length)]
+      ]);
+    }, 80);
+
+    try {
+      const res = await fetch('/api/game/bet/slots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName, betAmount: bet })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        clearInterval(interval);
+        throw new Error(data.error || 'Failed to spin slot machine.');
+      }
+
+      // Keep spin active for 1500ms
+      setTimeout(() => {
+        clearInterval(interval);
+        setSlotReels(data.resultSymbols);
+        setSlotsRolling(false);
+        setPoints?.(data.newPoints);
+        setLastWinMessage(data.message);
+
+        // Notify
+        showNotice?.(data.message, data.win ? 'success' : 'error');
+
+        // History entry
+        setBetHistory(prev => [
+          {
+            id: 'b_' + Math.random().toString(36).substring(2, 11),
+            game: 'Aura Slots 🎰',
+            bet,
+            result: data.resultSymbols.join(' '),
+            payout: data.win ? Math.floor(bet * data.multiplier) : 0,
+            won: data.win,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          },
+          ...prev
+        ]);
+      }, 1500);
+
+    } catch (err: any) {
+      clearInterval(interval);
+      setSlotsRolling(false);
+      showNotice?.(err.message || 'Error occurred during slots spin.', 'error');
+    }
+  };
+
   return (
     <div className="space-y-8 pb-12">
       {/* Header Info */}
@@ -254,49 +420,76 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="grid grid-cols-1 md:grid-cols-2 gap-8"
+            className="grid grid-cols-1 md:grid-cols-3 gap-6"
           >
             {/* Maths Game Selector */}
-            <div className="p-8 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-purple-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-purple-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
               <div className="space-y-3">
                 <span className="text-xs font-mono font-bold text-purple-400 uppercase tracking-widest bg-purple-500/10 border border-purple-500/20 px-3 py-1 rounded-full inline-block">
                   Speed Logic
                 </span>
-                <h3 className="text-2xl font-bold text-white">Multithread Maths Arena</h3>
-                <p className="text-sm text-zinc-400 leading-relaxed">
+                <h3 className="text-xl font-bold text-white">Multithread Maths Arena</h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
                   Test your reaction speed against active moderators inside a timed math lobby. Solve equations to score aura points before anyone else does!
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  setActiveGame('math');
-                  startMathGame();
-                }}
-                className="w-full py-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
-              >
-                <Play className="w-4.5 h-4.5" /> Start Maths Lobby
-              </button>
+              <Tooltip content="Compete in fast-paced arithmetic to gain points" position="top">
+                <button
+                  onClick={() => {
+                    setActiveGame('math');
+                    startMathGame();
+                  }}
+                  className="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <Play className="w-4.5 h-4.5" /> Start Maths Lobby
+                </button>
+              </Tooltip>
             </div>
 
             {/* King of Diamonds Selector */}
-            <div className="p-8 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
               <div className="space-y-3">
                 <span className="text-xs font-mono font-bold text-pink-400 uppercase tracking-widest bg-pink-500/10 border border-pink-500/20 px-3 py-1 rounded-full inline-block">
                   Strategy Card Game
                 </span>
-                <h3 className="text-2xl font-bold text-white">King of Diamonds (KOTD)</h3>
-                <p className="text-sm text-zinc-400 leading-relaxed">
+                <h3 className="text-xl font-bold text-white">King of Diamonds (KOTD)</h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
                   The ultimate logical standoff. Submit numbers from 0 to 100. Target is 0.8 * average. Furthest player loses a life. Last standing wins the crown!
                 </p>
               </div>
-              <button
-                onClick={() => {
-                  setActiveGame('kotd');
-                }}
-                className="w-full py-4 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
-              >
-                <Play className="w-4.5 h-4.5" /> Play King of Diamonds
-              </button>
+              <Tooltip content="Play a thrilling multiplayer math guessing strategy game" position="top">
+                <button
+                  onClick={() => {
+                    setActiveGame('kotd');
+                  }}
+                  className="w-full py-3.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                >
+                  <Play className="w-4.5 h-4.5" /> Play King of Diamonds
+                </button>
+              </Tooltip>
+            </div>
+
+            {/* Betting Casino Selector */}
+            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-amber-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+              <div className="space-y-3">
+                <span className="text-xs font-mono font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full inline-block">
+                  High Stakes Luck
+                </span>
+                <h3 className="text-xl font-bold text-white">Aura Betting Casino</h3>
+                <p className="text-xs text-zinc-400 leading-relaxed">
+                  Put your hard-earned Aura Points on the line! Win double-or-nothing rewards on the classic 50/50 Coinflip or spin the 3-reel Slot Machine for massive payouts of up to 25x!
+                </p>
+              </div>
+              <Tooltip content="Wager your points in slots or coinflip mini-games" position="top">
+                <button
+                  onClick={() => {
+                    setActiveGame('betting');
+                  }}
+                  className="w-full py-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-amber-950/25"
+                >
+                  <Coins className="w-4 h-4" /> Enter Betting Casino
+                </button>
+              </Tooltip>
             </div>
           </motion.div>
         ) : activeGame === 'math' ? (
@@ -393,7 +586,7 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
               </div>
             </div>
           </motion.div>
-        ) : (
+        ) : activeGame === 'kotd' ? (
           /* KING OF DIAMONDS (KOTD) DISPLAY */
           <motion.div
             key="kotd-game"
@@ -545,6 +738,377 @@ export default function AuraGames({ playerName: propPlayerName, isLoggedIn, onOp
                 </div>
               </div>
             )}
+          </motion.div>
+        ) : (
+          /* AURA BETTING CASINO DISPLAY */
+          <motion.div
+            key="betting-casino"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="space-y-6"
+          >
+            {/* Header / Back button */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-900/30 p-5 rounded-2xl border border-zinc-800/60 shadow-lg">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setActiveGame(null)}
+                  className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 transition-all text-zinc-400 hover:text-white"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <div>
+                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-amber-400" /> Aura Palace Casino
+                  </h3>
+                  <p className="text-xs text-zinc-400">Play provably fair games of chance with your Aura Points</p>
+                </div>
+              </div>
+
+              {/* Player Balance widget */}
+              <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300">
+                <Coins className="w-5 h-5" />
+                <div className="font-mono text-sm font-black">
+                  {points.toLocaleString()} <span className="text-[10px] text-amber-400/70 font-sans font-bold">AP</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Content Layout */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              
+              {/* Play Area */}
+              <div className="lg:col-span-8 space-y-6">
+                
+                {/* Tabs selection: Coinflip or Slots */}
+                <div className="flex border-b border-zinc-800 bg-zinc-950/40 p-1 rounded-xl">
+                  <button
+                    onClick={() => {
+                      if (!isRolling && !slotsRolling) {
+                        setActiveCasinoTab('coinflip');
+                        setLastWinMessage(null);
+                      }
+                    }}
+                    disabled={isRolling || slotsRolling}
+                    className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      activeCasinoTab === 'coinflip'
+                        ? 'bg-zinc-800 text-amber-400 border border-zinc-700/50 shadow'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40'
+                    } disabled:opacity-50`}
+                  >
+                    🪙 50/50 Coin Flip
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!isRolling && !slotsRolling) {
+                        setActiveCasinoTab('slots');
+                        setLastWinMessage(null);
+                      }
+                    }}
+                    disabled={isRolling || slotsRolling}
+                    className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      activeCasinoTab === 'slots'
+                        ? 'bg-zinc-800 text-amber-400 border border-zinc-700/50 shadow'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40'
+                    } disabled:opacity-50`}
+                  >
+                    🎰 Aura Slots
+                  </button>
+                </div>
+
+                {/* Tab content 1: Coin Flip */}
+                {activeCasinoTab === 'coinflip' && (
+                  <div className="p-8 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl flex flex-col items-center space-y-8 text-center relative overflow-hidden">
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] uppercase font-mono tracking-widest text-amber-500 font-bold">Provably Fair Game</span>
+                      <h4 className="text-xl font-bold text-white">Classic Coinflip</h4>
+                      <p className="text-xs text-zinc-400 max-w-sm">Double your bet amount! Pick Heads or Tails, place your bet, and flip the golden coin.</p>
+                    </div>
+
+                    {/* Flipping Coin Asset */}
+                    <div className="py-4 flex flex-col items-center justify-center">
+                      <div className="perspective">
+                        <motion.div
+                          animate={isRolling ? { rotateY: [0, 360, 720, 1080, 1440, 1800] } : { rotateY: 0 }}
+                          transition={isRolling ? { repeat: Infinity, duration: 1.0, ease: "linear" } : { duration: 0.5 }}
+                          className="w-32 h-32 rounded-full bg-gradient-to-b from-amber-300 via-amber-500 to-amber-600 border-4 border-amber-300/60 shadow-2xl shadow-amber-500/20 flex items-center justify-center select-none text-5xl font-black text-amber-950 font-mono"
+                        >
+                          {coinResult ? (coinResult === 'heads' ? '🪙' : '👑') : (coinChoice === 'heads' ? '🪙' : '👑')}
+                        </motion.div>
+                      </div>
+                      
+                      {/* Subtitle helper showing what coin symbol is */}
+                      <span className="text-[10px] text-zinc-500 font-mono mt-3 block">
+                        {coinResult 
+                          ? `Landed on: ${coinResult.toUpperCase()} (${coinResult === 'heads' ? '🪙 Heads' : '👑 Tails'})` 
+                          : `Currently selected: ${coinChoice.toUpperCase()}`}
+                      </span>
+                    </div>
+
+                    {/* Choices Picker */}
+                    <div className="flex gap-4 w-full max-w-xs">
+                      <button
+                        onClick={() => !isRolling && setCoinChoice('heads')}
+                        disabled={isRolling}
+                        className={`flex-1 py-3.5 rounded-xl text-xs font-bold transition-all flex flex-col items-center gap-1.5 border ${
+                          coinChoice === 'heads'
+                            ? 'bg-amber-500/10 border-amber-500 text-amber-300'
+                            : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                        } disabled:opacity-50`}
+                      >
+                        <span className="text-2xl">🪙</span>
+                        <span>Heads</span>
+                      </button>
+                      <button
+                        onClick={() => !isRolling && setCoinChoice('tails')}
+                        disabled={isRolling}
+                        className={`flex-1 py-3.5 rounded-xl text-xs font-bold transition-all flex flex-col items-center gap-1.5 border ${
+                          coinChoice === 'tails'
+                            ? 'bg-amber-500/10 border-amber-500 text-amber-300'
+                            : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:border-zinc-700'
+                        } disabled:opacity-50`}
+                      >
+                        <span className="text-2xl">👑</span>
+                        <span>Tails</span>
+                      </button>
+                    </div>
+
+                    {/* Betting Input & CTA */}
+                    <div className="w-full max-w-sm space-y-4 pt-2">
+                      <div className="space-y-1.5">
+                        <label className="text-[10px] uppercase tracking-wider font-mono text-zinc-500 font-bold block text-left">Wager Amount (Min 5 AP)</label>
+                        <div className="flex gap-2 text-left">
+                          <input
+                            type="number"
+                            min="5"
+                            disabled={isRolling}
+                            value={betAmount}
+                            onChange={(e) => setBetAmount(e.target.value)}
+                            placeholder="Wager AP"
+                            className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono focus:outline-none focus:border-amber-500 disabled:opacity-50 text-center"
+                          />
+                          <div className="flex gap-1 shrink-0">
+                            <button
+                              onClick={() => !isRolling && setBetAmount('10')}
+                              disabled={isRolling}
+                              className="px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-mono text-zinc-400 hover:text-white"
+                            >
+                              10
+                            </button>
+                            <button
+                              onClick={() => !isRolling && setBetAmount('50')}
+                              disabled={isRolling}
+                              className="px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-mono text-zinc-400 hover:text-white"
+                            >
+                              50
+                            </button>
+                            <button
+                              onClick={() => !isRolling && setBetAmount('250')}
+                              disabled={isRolling}
+                              className="px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-mono text-zinc-400 hover:text-white"
+                            >
+                              250
+                            </button>
+                            <button
+                              onClick={() => !isRolling && setBetAmount(points.toString())}
+                              disabled={isRolling}
+                              className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs font-mono text-amber-300 hover:bg-amber-500/20"
+                            >
+                              ALL IN
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleCoinFlip}
+                        disabled={isRolling || !isLoggedIn}
+                        className="w-full py-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-sm uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 active:scale-98 shadow-lg shadow-amber-950/20"
+                      >
+                        {isRolling ? (
+                          <>
+                            <RotateCw className="w-4 h-4 animate-spin" /> Flipping Golden Coin...
+                          </>
+                        ) : (
+                          <>
+                            Flip Coin • Bet {Math.floor(Number(betAmount) || 0)} AP
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {lastWinMessage && (
+                      <div className={`p-4 rounded-xl font-bold text-sm w-full ${lastWinMessage.includes('Won') || lastWinMessage.includes('won') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'} animate-fade-in`}>
+                        {lastWinMessage}
+                      </div>
+                    )}
+
+                  </div>
+                )}
+
+                {/* Tab content 2: Slots */}
+                {activeCasinoTab === 'slots' && (
+                  <div className="p-8 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl flex flex-col items-center space-y-8 text-center relative overflow-hidden">
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] uppercase font-mono tracking-widest text-amber-500 font-bold">Jackpot Multipliers</span>
+                      <h4 className="text-xl font-bold text-white">Aura Slots Machine</h4>
+                      <p className="text-xs text-zinc-400 max-w-sm">
+                        Payouts up to <span className="text-amber-400 font-bold">25x</span>! 2 matching symbols gives a neat 3x, 3 symbols hits high payouts (up to 25x for Kings)!
+                      </p>
+                    </div>
+
+                    {/* Slots Reels display */}
+                    <div className="flex gap-4 p-6 rounded-2xl bg-zinc-900/60 border border-zinc-800/80 shadow-inner w-full max-w-sm justify-center">
+                      {slotReels.map((symbol, idx) => (
+                        <div 
+                          key={idx} 
+                          className="w-20 h-24 rounded-xl bg-zinc-950 border-2 border-zinc-800 flex items-center justify-center text-4xl shadow-md font-sans select-none relative overflow-hidden"
+                        >
+                          <motion.div
+                            key={`${symbol}-${slotsRolling}`}
+                            initial={slotsRolling ? { y: -30, opacity: 0.5 } : { y: 0, opacity: 1 }}
+                            animate={{ y: 0, opacity: 1 }}
+                            transition={{ duration: 0.08 }}
+                          >
+                            {symbol}
+                          </motion.div>
+                          {/* Ambient shadow gradient */}
+                          <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/20 pointer-events-none" />
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Betting Input & CTA */}
+                    <div className="w-full max-w-sm space-y-4">
+                      <div className="space-y-1.5 text-left">
+                        <label className="text-[10px] uppercase tracking-wider font-mono text-zinc-500 font-bold block text-left">Wager Amount (Min 5 AP)</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            min="5"
+                            disabled={slotsRolling}
+                            value={betAmount}
+                            onChange={(e) => setBetAmount(e.target.value)}
+                            placeholder="Wager AP"
+                            className="flex-1 px-4 py-3 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono focus:outline-none focus:border-amber-500 disabled:opacity-50 text-center"
+                          />
+                          <div className="flex gap-1 shrink-0">
+                            <button
+                              onClick={() => !slotsRolling && setBetAmount('10')}
+                              disabled={slotsRolling}
+                              className="px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-mono text-zinc-400 hover:text-white"
+                            >
+                              10
+                            </button>
+                            <button
+                              onClick={() => !slotsRolling && setBetAmount('50')}
+                              disabled={slotsRolling}
+                              className="px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-mono text-zinc-400 hover:text-white"
+                            >
+                              50
+                            </button>
+                            <button
+                              onClick={() => !slotsRolling && setBetAmount('250')}
+                              disabled={slotsRolling}
+                              className="px-3 py-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-mono text-zinc-400 hover:text-white"
+                            >
+                              250
+                            </button>
+                            <button
+                              onClick={() => !slotsRolling && setBetAmount(points.toString())}
+                              disabled={slotsRolling}
+                              className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs font-mono text-amber-300 hover:bg-amber-500/20"
+                            >
+                              ALL IN
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={handleSpinSlots}
+                        disabled={slotsRolling || !isLoggedIn}
+                        className="w-full py-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-sm uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 active:scale-98 shadow-lg shadow-amber-950/20"
+                      >
+                        {slotsRolling ? (
+                          <>
+                            <RotateCw className="w-4 h-4 animate-spin" /> Pulling Slot Lever...
+                          </>
+                        ) : (
+                          <>
+                            Spin Slots • Bet {Math.floor(Number(betAmount) || 0)} AP
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {lastWinMessage && (
+                      <div className={`p-4 rounded-xl font-bold text-sm w-full ${lastWinMessage.includes('won') || lastWinMessage.includes('Multiplier') ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'} animate-fade-in`}>
+                        {lastWinMessage}
+                      </div>
+                    )}
+
+                    {/* Paytable Guide */}
+                    <div className="p-4 rounded-xl bg-zinc-900/40 border border-zinc-800 text-[10px] text-zinc-500 text-left w-full space-y-1">
+                      <div className="font-bold text-zinc-400 mb-1">Payout Guide:</div>
+                      <div className="flex justify-between font-mono"><span>👑 👑 👑 (Three Kings)</span> <span className="font-bold text-amber-400">25x Payout</span></div>
+                      <div className="flex justify-between font-mono"><span>💎 💎 💎 (Three Diamonds)</span> <span className="font-bold text-amber-400">15x Payout</span></div>
+                      <div className="flex justify-between font-mono"><span>🍇 🍇 🍇 / 🍋 🍋 🍋 / 🍒 🍒 🍒 (Three Fruit)</span> <span className="font-bold text-amber-400">10x Payout</span></div>
+                      <div className="flex justify-between font-mono"><span>Any 2 matching symbols</span> <span className="font-bold text-zinc-300">3x Payout</span></div>
+                      <div className="flex justify-between font-mono"><span>No matches</span> <span className="text-zinc-600 font-mono">Deduct Wager</span></div>
+                    </div>
+
+                  </div>
+                )}
+
+              </div>
+
+              {/* Sidebar Recent Bets History */}
+              <div className="lg:col-span-4 bg-zinc-900/40 border border-zinc-800 rounded-2xl p-6 shadow-xl space-y-6 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Landmark className="w-4 h-4 text-amber-400" /> Recent Bets History
+                  </h3>
+
+                  <div className="space-y-2.5 overflow-y-auto max-h-[380px] pr-1 font-mono text-[11px]">
+                    {betHistory.length === 0 ? (
+                      <span className="text-zinc-600 italic block text-center py-6">Your bets for this session will display here. Make a wager to play!</span>
+                    ) : (
+                      betHistory.map((historyItem) => (
+                        <div 
+                          key={historyItem.id} 
+                          className={`p-3 rounded-xl border flex flex-col gap-1 ${
+                            historyItem.won 
+                              ? 'bg-emerald-950/20 border-emerald-500/20 text-emerald-300' 
+                              : 'bg-rose-950/10 border-rose-500/10 text-rose-400'
+                          }`}
+                        >
+                          <div className="flex justify-between items-center font-bold">
+                            <span>{historyItem.game}</span>
+                            <span className="text-zinc-500 font-normal text-[10px]">{historyItem.time}</span>
+                          </div>
+                          <div className="flex justify-between items-center text-[10px]">
+                            <span>Wager: {historyItem.bet} AP</span>
+                            <span className="font-bold">
+                              {historyItem.won ? `Payout: +${historyItem.payout} AP` : 'Lost'}
+                            </span>
+                          </div>
+                          <div className="text-[9px] text-zinc-500 text-left">
+                            Outcome: {historyItem.result}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-amber-500/5 border border-amber-500/10 text-[10px] text-zinc-500 leading-relaxed text-center">
+                  ⚠️ Mini-games are provably fair. Play responsibly. All payouts are computed immediately on the secure server database.
+                </div>
+              </div>
+
+            </div>
+
           </motion.div>
         )}
       </AnimatePresence>

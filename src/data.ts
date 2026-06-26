@@ -3,6 +3,7 @@ export interface StaffMember {
   username: string;
   role: 'FOUNDER' | 'CO FOUNDER' | 'OWNER' | 'MANAGER' | 'LEAD ADMIN' | 'ADMIN' | 'SENIOR MODERATOR' | 'MODERATOR';
   color: string;
+  avatarUrl?: string;
 }
 
 export interface Announcement {
@@ -28,24 +29,24 @@ export interface Creation {
 }
 
 export const STAFF_MEMBERS: StaffMember[] = [
-  { name: 'Palindrome ☭', username: '@panadol_xx03', role: 'FOUNDER', color: 'from-purple-500 to-indigo-600' },
-  { name: 'Queenz', username: '@queen_z', role: 'CO FOUNDER', color: 'from-pink-500 to-rose-600' },
-  { name: 'Masab Ellahi', username: '@masabellahi', role: 'OWNER', color: 'from-red-500 to-orange-600' },
-  { name: 'PeanutLiver', username: '@loyalpeanut', role: 'OWNER', color: 'from-amber-500 to-yellow-600' },
-  { name: 'SoulMalik', username: '@soulmalik._.', role: 'OWNER', color: 'from-teal-500 to-emerald-600' },
+  { name: 'Palindrome ☭', username: '@panadol_xx03', role: 'FOUNDER', color: 'from-purple-500 to-indigo-600', avatarUrl: 'https://i.postimg.cc/02tt7yvS/pali.webp' },
+  { name: 'Queenz', username: '@queen_z', role: 'CO FOUNDER', color: 'from-pink-500 to-rose-600', avatarUrl: 'https://i.postimg.cc/VLZHQp1L/queenz.webp' },
+  { name: 'Masab Ellahi', username: '@masabellahi', role: 'OWNER', color: 'from-red-500 to-orange-600', avatarUrl: 'https://i.postimg.cc/3R4yf90H/masab.webp' },
+  { name: 'PeanutLiver', username: '@loyalpeanut', role: 'OWNER', color: 'from-amber-500 to-yellow-600', avatarUrl: 'https://i.postimg.cc/8zZj1xhc/peanut.webp' },
+  { name: 'SoulMalik', username: '@soulmalik._.', role: 'OWNER', color: 'from-teal-500 to-emerald-600', avatarUrl: 'https://i.postimg.cc/G2QPrXh2/Soul-Malik.webp' },
   { name: 'No Data', username: '-------', role: 'MANAGER', color: 'from-gray-500 to-slate-600' },
-  { name: 'Farii', username: '@huhfarii', role: 'LEAD ADMIN', color: 'from-blue-500 to-cyan-600' },
-  { name: 'Ibn-e-batota', username: '@ibbi_hehe', role: 'ADMIN', color: 'from-cyan-500 to-blue-600' },
+  { name: 'Farii', username: '@huhfarii', role: 'LEAD ADMIN', color: 'from-blue-500 to-cyan-600', avatarUrl: 'https://i.postimg.cc/dt06QcC3/fariii.webp' },
+  { name: 'Ibn-e-batota', username: '@ibbi_hehe', role: 'ADMIN', color: 'from-cyan-500 to-blue-600', avatarUrl: 'https://i.postimg.cc/wjykJ50M/ibbi.webp' },
   { name: 'No Data', username: '------', role: 'SENIOR MODERATOR', color: 'from-zinc-500 to-neutral-600' },
   { name: 'No Data', username: '------', role: 'SENIOR MODERATOR', color: 'from-zinc-500 to-neutral-600' },
-  { name: 'Allama', username: '@no._.one9.11', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'Mighty.burg3r', username: '@brzrkr_.', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'KOLE', username: '@purpuleeee', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'PRINCESS MIRCHII', username: '@804_qadi', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'Ded_inside', username: '@ded_inside13', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'Bipolar Disorder', username: '@good_hai_boss', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'Toxic_Mustafa', username: '@toxic_mustafa', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' },
-  { name: 'shino.presence', username: '@shino.presencex999', role: 'MODERATOR', color: 'from-violet-400 to-purple-500' }
+  { name: 'Allama', username: '@no._.one9.11', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/G25fd3pT/allama.webp' },
+  { name: 'Mighty.burg3r', username: '@brzrkr_.', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/W4bj432R/brzrkr.webp' },
+  { name: 'KOLE', username: '@purpuleeee', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/wBv8pGVx/kole.webp' },
+  { name: 'PRINCESS MIRCHII', username: '@804_qadi', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/qq9Mhd1K/princess.webp' },
+  { name: 'Ded_inside', username: '@ded_inside13', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/ZK7XLcm1/ded.webp' },
+  { name: 'Bipolar Disorder', username: '@good_hai_boss', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/yNgKRGSy/bipolar.webp' },
+  { name: 'Toxic_Mustafa', username: '@toxic_mustafa', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/L80YRrpW/mustafa.webp' },
+  { name: 'shino.presence', username: '@shino.presencex999', role: 'MODERATOR', color: 'from-violet-400 to-purple-500', avatarUrl: 'https://i.postimg.cc/7hDbm4gF/shino.webp' }
 ];
 
 export const ANNOUNCEMENTS: Announcement[] = [

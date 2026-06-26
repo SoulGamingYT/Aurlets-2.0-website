@@ -17,9 +17,11 @@ import {
   Layers,
   Sparkle,
   Image as ImageIcon,
-  Gift
+  Gift,
+  Trash2
 } from 'lucide-react';
 import { DiscordIcon } from './Icons';
+import { Tooltip } from './Tooltip';
 
 interface CustomRole {
   id: string;
@@ -37,7 +39,21 @@ interface ShopProps {
   points: number;
   setPoints: React.Dispatch<React.SetStateAction<number>>;
   onOpenAuthModal: () => void;
+  discordUserId?: string;
 }
+
+const PRESET_ROLES = [
+  { id: '1417575135279452221', name: 'Blossom 🌸', emoji: '🌸', price: 2500 },
+  { id: '1417674566515560529', name: 'Overclocked ⚡', emoji: '⚡', price: 5000 },
+  { id: '1417679884733649007', name: 'Shieldbearer 🛡️', emoji: '🛡️', price: 7500 },
+  { id: '1423454938784075949', name: 'The Honored One', emoji: '💫', price: 10000 },
+  { id: '1417681913069572267', name: 'Ribbon Rebel 🎀', emoji: '🎀', price: 12500 },
+  { id: '1417688194098659389', name: 'Warrior ⚔️', emoji: '⚔️', price: 15000 },
+  { id: '1417689418034319394', name: 'Guardian 🪽', emoji: '🪽', price: 17500 },
+  { id: '1420103265298813009', name: 'Viber 🎧', emoji: '🎧', price: 20000 },
+  { id: '1420108774445682719', name: 'Elite 💸', emoji: '💸', price: 22500 },
+  { id: '1417692877227561064', name: 'Royal ⚜️', emoji: '⚜️', price: 25000 }
+];
 
 const LUXURY_COLORS = [
   { name: 'Aura Purple', hex: '#a855f7' },
@@ -56,7 +72,8 @@ export default function Shop({
   avatarUrl,
   points,
   setPoints,
-  onOpenAuthModal
+  onOpenAuthModal,
+  discordUserId
 }: ShopProps) {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'buy' | 'roles'>('buy');
@@ -88,10 +105,77 @@ export default function Shop({
   const [logIndex, setLogIndex] = useState(0);
   const [errorMessage, setErrorMessage] = useState('');
   const [serverRoles, setServerRoles] = useState<CustomRole[]>([]);
+  const [purchasedPresetIds, setPurchasedPresetIds] = useState<string[]>([]);
+  const [isPurchasingPreset, setIsPurchasingPreset] = useState<string | null>(null);
+  const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
 
   // Other cosmetic states purchased locally (for immediate client engagement)
   const [unlockedColor, setUnlockedColor] = useState<string | null>(() => localStorage.getItem('aurlets_unlocked_color'));
   const [unlockedFrame, setUnlockedFrame] = useState<boolean>(() => localStorage.getItem('aurlets_unlocked_frame') === 'true');
+  const [frameColor, setFrameColor] = useState<string>(() => localStorage.getItem('aurlets_frame_color') || '#a855f7');
+
+  // Editing Custom Role states
+  const [editingRoleId, setEditingRoleId] = useState<string | null>(null);
+  const [editRoleColor, setEditRoleColor] = useState('#ffffff');
+  const [editRoleIcon, setEditRoleIcon] = useState('⭐');
+  const [isEditingRole, setIsEditingRole] = useState(false);
+
+  const updateNameColor = (hex: string) => {
+    setUnlockedColor(hex);
+    localStorage.setItem('aurlets_unlocked_color', hex);
+    if (typeof window !== 'undefined' && window.dispatchEvent) {
+      window.dispatchEvent(new Event('storage'));
+    }
+  };
+
+  const updateFrameColor = (hex: string) => {
+    setFrameColor(hex);
+    localStorage.setItem('aurlets_frame_color', hex);
+    if (typeof window !== 'undefined' && window.dispatchEvent) {
+      window.dispatchEvent(new Event('storage'));
+    }
+  };
+
+  const handleEditRole = async (roleId: string) => {
+    if (!isLoggedIn) return;
+    if (points < 500) {
+      showNotice('Insufficient points! You need 500 AP to change style.', 'error');
+      return;
+    }
+    setIsEditingRole(true);
+    try {
+      const res = await fetch('/api/shop/edit-role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: nickname,
+          roleId,
+          newColor: editRoleColor,
+          newIcon: editRoleIcon,
+          currentPoints: points
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to update custom role.');
+      }
+
+      setPoints(data.newPoints);
+      if (data.customRoles) {
+        setServerRoles(data.customRoles);
+      } else {
+        setServerRoles(prev => prev.map(r => r.id === roleId ? { ...r, color: editRoleColor, icon: editRoleIcon } : r));
+      }
+      
+      setEditingRoleId(null);
+      showNotice('Custom role updated successfully for 500 AP!', 'success');
+    } catch (err: any) {
+      showNotice(err.message || 'Failed to update custom role.', 'error');
+    } finally {
+      setIsEditingRole(false);
+    }
+  };
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logTerminalEndRef = useRef<HTMLDivElement>(null);
@@ -175,6 +259,24 @@ export default function Shop({
       console.error('Error fetching custom roles:', err);
     }
   };
+
+  const fetchPurchasedPresetRoles = async () => {
+    if (!isLoggedIn || !nickname) return;
+    try {
+      const res = await fetch(`/api/shop/preset-purchases?username=${encodeURIComponent(nickname)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const ids = data.map((p: any) => p.roleId);
+        setPurchasedPresetIds(ids);
+      }
+    } catch (err) {
+      console.error('Error fetching preset purchases:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchPurchasedPresetRoles();
+  }, [isLoggedIn, nickname]);
 
   useEffect(() => {
     fetchRoles();
@@ -279,7 +381,7 @@ export default function Shop({
       onOpenAuthModal();
       return;
     }
-    const cost = 100;
+    const cost = 1000;
     if (points < cost) {
       showNotice('Insufficient Aura Points!', 'error');
       return;
@@ -296,7 +398,7 @@ export default function Shop({
       onOpenAuthModal();
       return;
     }
-    const cost = 150;
+    const cost = 1500;
     if (points < cost) {
       showNotice('Insufficient Aura Points!', 'error');
       return;
@@ -306,6 +408,94 @@ export default function Shop({
     setUnlockedFrame(true);
     localStorage.setItem('aurlets_unlocked_frame', 'true');
     showNotice('Radiant Profile Frame unlocked and applied! Admire your glowing border.', 'success');
+  };
+
+  // --- PURCHASE PRESET DISCORD ROLE ---
+  const handlePresetPurchase = async (roleId: string) => {
+    if (!isLoggedIn) {
+      onOpenAuthModal();
+      return;
+    }
+
+    const role = PRESET_ROLES.find(r => r.id === roleId);
+    if (!role) return;
+
+    if (points < role.price) {
+      showNotice('Insufficient points to purchase this role.', 'error');
+      return;
+    }
+
+    setIsPurchasingPreset(roleId);
+    try {
+      const res = await fetch('/api/shop/purchase-preset-role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: nickname,
+          roleId: roleId,
+          currentPoints: points,
+          discordUserId: discordUserId
+        })
+      });
+
+      let data: any = {};
+      const contentType = res.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned status ${res.status}`);
+      }
+
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to purchase preset role');
+      }
+
+      setPoints(data.newPoints);
+      setPurchasedPresetIds(prev => [...prev, roleId]);
+      showNotice(`Successfully purchased and assigned "${role.name}" role! Check your Discord profile!`, 'success');
+    } catch (err: any) {
+      console.error(err);
+      showNotice(err.message || 'Error occurred while purchasing role.', 'error');
+    } finally {
+      setIsPurchasingPreset(null);
+    }
+  };
+
+  // --- DELETE CUSTOM DISCORD ROLE ---
+  const handleDeleteRole = async (roleId: string) => {
+    if (!isLoggedIn || !nickname) return;
+    
+    if (!window.confirm("Are you sure you want to delete this custom role? This will also attempt to delete it from the Discord server (if connected) and cannot be undone.")) {
+      return;
+    }
+
+    setDeletingRoleId(roleId);
+    try {
+      const res = await fetch('/api/shop/delete-role', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          name: nickname,
+          roleId: roleId
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to delete custom role');
+      }
+
+      setServerRoles(data.customRoles || []);
+      showNotice('Custom role deleted successfully!', 'success');
+    } catch (err: any) {
+      console.error(err);
+      showNotice(err.message || 'Error occurred while deleting custom role.', 'error');
+    } finally {
+      setDeletingRoleId(null);
+    }
   };
 
   // --- PURCHASE CUSTOM DISCORD ROLE ---
@@ -319,7 +509,7 @@ export default function Shop({
       showNotice('Please input a role name first.', 'error');
       return;
     }
-    const cost = 350;
+    const cost = 49999;
     if (points < cost) {
       showNotice('Insufficient points to buy a custom role.', 'error');
       return;
@@ -340,7 +530,8 @@ export default function Shop({
           roleName: roleName.trim(),
           color: selectedColor,
           icon: iconVal,
-          currentPoints: points
+          currentPoints: points,
+          discordUserId: discordUserId
         })
       });
 
@@ -359,6 +550,9 @@ export default function Shop({
 
       setBotLogs(data.botLogs || []);
       setPoints(data.newPoints);
+      if (data.role) {
+        setServerRoles(prev => [data.role, ...prev]);
+      }
     } catch (err: any) {
       console.error(err);
       setErrorMessage(err.message || 'Error occurred while creating custom role.');
@@ -479,13 +673,15 @@ export default function Shop({
                       <span className="text-[9px] text-zinc-500 font-mono tracking-wide uppercase font-semibold">Cooldown Running</span>
                     </div>
                   ) : (
-                    <button
-                      onClick={handleDailyClaim}
-                      disabled={isClaiming}
-                      className="px-6 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all active:scale-95 shadow shadow-purple-500/20 uppercase tracking-wider flex items-center gap-2 animate-bounce"
-                    >
-                      <Sparkles className="w-4 h-4" /> Claim Daily Bonus
-                    </button>
+                    <Tooltip content="Instantly gain a free daily allowance of up to 10 Aura Points!" position="top">
+                      <button
+                        onClick={handleDailyClaim}
+                        disabled={isClaiming}
+                        className="px-6 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition-all active:scale-95 shadow shadow-purple-500/20 uppercase tracking-wider flex items-center gap-2 animate-bounce"
+                      >
+                        <Sparkles className="w-4 h-4" /> Claim Daily Bonus
+                      </button>
+                    </Tooltip>
                   )}
                 </div>
               </div>
@@ -558,6 +754,102 @@ export default function Shop({
               </AnimatePresence>
             </motion.div>
 
+            {/* DISCORD PRESET ROLES SHOP CATEGORY */}
+            <div className="space-y-4">
+              <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
+                <h3 className="text-sm uppercase font-mono tracking-wider text-zinc-400 font-bold flex items-center gap-2">
+                  <Award className="w-4 h-4 text-purple-400 animate-pulse" /> 🎭 Premium Server Roles Shop
+                </h3>
+                <span className="text-[10px] bg-purple-500/10 border border-purple-500/20 text-purple-300 font-mono font-bold px-2.5 py-1 rounded-full uppercase">
+                  Auto-Assigned On Discord
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {PRESET_ROLES.map((role) => {
+                  const isOwned = purchasedPresetIds.includes(role.id);
+                  const isPointsEnough = points >= role.price;
+                  const isPending = isPurchasingPreset === role.id;
+
+                  return (
+                    <div 
+                      key={role.id} 
+                      id={`preset-role-card-${role.id}`}
+                      className={`p-5 rounded-xl border bg-zinc-900/10 space-y-4 flex flex-col justify-between transition-all duration-300 ${
+                        isOwned 
+                          ? 'border-emerald-500/30 bg-emerald-950/5 font-bold' 
+                          : 'border-zinc-850 hover:border-zinc-700/80 hover:bg-zinc-900/20'
+                      }`}
+                    >
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-start gap-2">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-xl shrink-0 select-none">{role.emoji}</span>
+                            <span className="text-sm font-bold text-white tracking-tight truncate">{role.name}</span>
+                          </div>
+                          <span className="text-xs font-mono font-black text-purple-400 bg-purple-500/5 px-2.5 py-1 rounded-lg border border-purple-500/10 shrink-0">
+                            {role.price} AP
+                          </span>
+                        </div>
+                        
+                        <div className="space-y-1">
+                          <p className="text-[10px] text-zinc-400 leading-normal">
+                            Instantly rewards you with the <span className="text-white font-semibold">@{role.name}</span> role on our official Discord server.
+                          </p>
+                          <div className="text-[9px] font-mono text-zinc-500 flex items-center gap-1 break-all select-all">
+                            <span className="text-zinc-600 font-semibold select-none">ROLE ID:</span> {role.id}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="pt-2">
+                        {isOwned ? (
+                          <div className="w-full py-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg text-emerald-400 text-xs font-bold font-mono text-center flex items-center justify-center gap-1.5">
+                            <Check className="w-4 h-4" /> Purchased &amp; Active
+                          </div>
+                        ) : !isLoggedIn ? (
+                          <button
+                            type="button"
+                            id={`btn-preset-connect-${role.id}`}
+                            onClick={onOpenAuthModal}
+                            className="w-full py-2.5 rounded-lg text-xs font-bold transition-all bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white uppercase flex items-center justify-center gap-1.5"
+                          >
+                            <DiscordIcon className="w-3.5 h-3.5 fill-current" /> Connect Discord
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            id={`btn-preset-buy-${role.id}`}
+                            disabled={!isPointsEnough || isPending}
+                            onClick={() => handlePresetPurchase(role.id)}
+                            className={`w-full py-2.5 rounded-lg text-xs font-bold transition-all uppercase flex items-center justify-center gap-1.5 ${
+                              isPending
+                                ? 'bg-purple-600/50 text-white cursor-wait'
+                                : !isPointsEnough
+                                  ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700/50'
+                                  : 'bg-purple-600 hover:bg-purple-500 text-white active:scale-97'
+                            }`}
+                          >
+                            {isPending ? (
+                              <>
+                                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                Processing...
+                              </>
+                            ) : (
+                              <>
+                                <Coins className="w-3.5 h-3.5" />
+                                Buy for {role.price} AP
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* COSMETIC PROFILE CATALOG */}
             <div className="space-y-4">
               <h3 className="text-sm uppercase font-mono tracking-wider text-zinc-500 font-bold">🛒 General Profiles Shop Catalog</h3>
@@ -570,24 +862,73 @@ export default function Shop({
                       <span className="p-1.5 bg-cyan-500/10 border border-cyan-500/20 text-cyan-400 rounded-lg">
                         <Palette className="w-4 h-4" />
                       </span>
-                      <span className="text-xs font-mono font-bold text-zinc-400">100 AP</span>
+                      <span className="text-xs font-mono font-bold text-zinc-400">1000 AP</span>
                     </div>
-                    <h4 className="text-sm font-bold text-white">Neon Cyan Name Style</h4>
+                    <h4 className="text-sm font-bold text-white">Custom Name Color Style</h4>
                     <p className="text-xs text-zinc-400 leading-normal">
-                      Changes your username styling color to Cyan on active farming logs and multiplayer lobbies.
+                      Unlock the ability to change your username color to any custom color across the entire platform.
                     </p>
                   </div>
-                  <button
-                    onClick={() => purchaseNameColor('#06b6d4')}
-                    disabled={unlockedColor === '#06b6d4'}
-                    className={`w-full py-2.5 rounded-lg text-xs font-bold transition-all ${
-                      unlockedColor === '#06b6d4'
-                        ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700/50'
-                        : 'bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white'
-                    }`}
-                  >
-                    {unlockedColor === '#06b6d4' ? 'Purchased & Equipped' : 'Deduct 100 AP & Equip'}
-                  </button>
+                  
+                  {unlockedColor ? (
+                    <div className="space-y-3 pt-2 border-t border-zinc-850">
+                      <div className="text-[10px] uppercase font-mono tracking-wider text-zinc-500 font-bold">Pick Your Favorite Color:</div>
+                      
+                      {/* Presets Grid */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { name: 'Cyan', hex: '#06b6d4' },
+                          { name: 'Pink', hex: '#ec4899' },
+                          { name: 'Purple', hex: '#a855f7' },
+                          { name: 'Emerald', hex: '#10b981' },
+                          { name: 'Orange', hex: '#f97316' },
+                          { name: 'Gold', hex: '#eab308' },
+                          { name: 'Red', hex: '#ef4444' },
+                          { name: 'White', hex: '#ffffff' }
+                        ].map((p) => (
+                          <button
+                            key={p.hex}
+                            type="button"
+                            onClick={() => updateNameColor(p.hex)}
+                            className={`w-6 h-6 rounded-full border transition-all ${
+                              unlockedColor === p.hex 
+                                ? 'border-white scale-110 shadow-lg' 
+                                : 'border-transparent opacity-80 hover:opacity-100 hover:scale-105'
+                            }`}
+                            style={{ backgroundColor: p.hex }}
+                            title={p.name}
+                          />
+                        ))}
+
+                        {/* Custom Color Picker Input */}
+                        <div className="relative w-6 h-6 rounded-full overflow-hidden border border-zinc-700/60 bg-zinc-900 hover:border-zinc-500 cursor-pointer flex items-center justify-center">
+                          <input
+                            type="color"
+                            value={unlockedColor}
+                            onChange={(e) => updateNameColor(e.target.value)}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                            title="Choose Custom Color"
+                          />
+                          <span className="text-[10px] pointer-events-none">🎨</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5 bg-zinc-950/60 p-2 rounded-lg border border-zinc-900">
+                        <span className="text-[9px] font-mono text-zinc-500">Equipped Color:</span>
+                        <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded" style={{ color: unlockedColor, backgroundColor: `${unlockedColor}12` }}>
+                          {unlockedColor.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => purchaseNameColor('#06b6d4')}
+                      className="w-full py-2.5 rounded-lg text-xs font-bold transition-all bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white"
+                    >
+                      Deduct 1000 AP & Equip
+                    </button>
+                  )}
                 </div>
 
                 {/* Product 2: Avatar Glow border */}
@@ -597,24 +938,72 @@ export default function Shop({
                       <span className="p-1.5 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-lg">
                         <Award className="w-4 h-4" />
                       </span>
-                      <span className="text-xs font-mono font-bold text-zinc-400">150 AP</span>
+                      <span className="text-xs font-mono font-bold text-zinc-400">1500 AP</span>
                     </div>
                     <h4 className="text-sm font-bold text-white">Radiant Avatar Frame</h4>
                     <p className="text-xs text-zinc-400 leading-normal">
-                      Unlocks an animated glowing purple border wrapping your avatar photo in AFK logs and lists.
+                      Unlocks an animated glowing custom border wrapping your avatar photo in rosters, logs, and pages.
                     </p>
                   </div>
-                  <button
-                    onClick={purchaseAvatarFrame}
-                    disabled={unlockedFrame}
-                    className={`w-full py-2.5 rounded-lg text-xs font-bold transition-all ${
-                      unlockedFrame
-                        ? 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700/50'
-                        : 'bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white'
-                    }`}
-                  >
-                    {unlockedFrame ? 'Purchased & Equipped' : 'Deduct 150 AP & Equip'}
-                  </button>
+                  
+                  {unlockedFrame ? (
+                    <div className="space-y-3 pt-2 border-t border-zinc-850">
+                      <div className="text-[10px] uppercase font-mono tracking-wider text-zinc-500 font-bold">Pick Your Frame Color:</div>
+                      
+                      {/* Presets Grid */}
+                      <div className="flex flex-wrap gap-1.5">
+                        {[
+                          { name: 'Cosmic Purple', hex: '#a855f7' },
+                          { name: 'Ruby Glow', hex: '#ef4444' },
+                          { name: 'Ocean Cyan', hex: '#06b6d4' },
+                          { name: 'Emerald Glow', hex: '#10b981' },
+                          { name: 'Sunset Orange', hex: '#f97316' },
+                          { name: 'Golden Sunrise', hex: '#eab308' },
+                          { name: 'Royal White', hex: '#ffffff' }
+                        ].map((p) => (
+                          <button
+                            key={p.hex}
+                            type="button"
+                            onClick={() => updateFrameColor(p.hex)}
+                            className={`w-6 h-6 rounded-full border transition-all ${
+                              frameColor === p.hex 
+                                ? 'border-white scale-110 shadow-lg' 
+                                : 'border-transparent opacity-80 hover:opacity-100 hover:scale-105'
+                            }`}
+                            style={{ backgroundColor: p.hex }}
+                            title={p.name}
+                          />
+                        ))}
+
+                        {/* Custom Color Picker Input */}
+                        <div className="relative w-6 h-6 rounded-full overflow-hidden border border-zinc-700/60 bg-zinc-900 hover:border-zinc-500 cursor-pointer flex items-center justify-center">
+                          <input
+                            type="color"
+                            value={frameColor}
+                            onChange={(e) => updateFrameColor(e.target.value)}
+                            className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                            title="Choose Custom Color"
+                          />
+                          <span className="text-[10px] pointer-events-none">🎨</span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5 bg-zinc-950/60 p-2 rounded-lg border border-zinc-900">
+                        <span className="text-[9px] font-mono text-zinc-500">Frame Color:</span>
+                        <span className="text-[10px] font-bold font-mono px-1.5 py-0.5 rounded" style={{ color: frameColor, backgroundColor: `${frameColor}12` }}>
+                          {frameColor.toUpperCase()}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={purchaseAvatarFrame}
+                      className="w-full py-2.5 rounded-lg text-xs font-bold transition-all bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 hover:text-white"
+                    >
+                      Deduct 1500 AP & Equip
+                    </button>
+                  )}
                 </div>
 
               </div>
@@ -626,7 +1015,7 @@ export default function Shop({
                 <Layers className="w-3.5 h-3.5" /> Premium Custom Role Mechanics
               </span>
               <p>
-                The premium Custom Discord Role costs <span className="text-purple-400 font-black">350 AP</span>. Upon purchase:
+                The premium Custom Discord Role costs <span className="text-purple-400 font-black">49999 AP</span>. Upon purchase:
               </p>
               <ul className="list-disc list-inside space-y-1.5 pl-1.5">
                 <li>The website securely calls our connected Discord Bot.</li>
@@ -895,26 +1284,37 @@ export default function Shop({
                   {/* Submit purchase */}
                   <div className="pt-2">
                     {!isLoggedIn ? (
-                      <button
-                        type="button"
-                        onClick={onOpenAuthModal}
-                        className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5"
-                      >
-                        <DiscordIcon className="w-4 h-4 fill-white" /> Connect Profile to Create
-                      </button>
+                      <Tooltip content="Sign in with Discord first to buy a custom role" position="top">
+                        <button
+                          type="button"
+                          onClick={onOpenAuthModal}
+                          className="w-full py-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-1.5"
+                        >
+                          <DiscordIcon className="w-4 h-4 fill-white" /> Connect Profile to Create
+                        </button>
+                      </Tooltip>
                     ) : (
-                      <button
-                        type="submit"
-                        disabled={points < 350 || !roleName.trim()}
-                        className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 disabled:pointer-events-none active:scale-98 shadow-lg shadow-purple-600/10 flex items-center justify-center gap-1.5"
-                      >
-                        <Coins className="w-4 h-4" /> Deduct 350 AP &amp; Create Role
-                      </button>
+                      <Tooltip content="Spend 49999 AP to create a server-wide role with custom name and style" position="top">
+                        <button
+                          type="submit"
+                          disabled={points < 49999 || !roleName.trim() || (serverRoles.filter(r => r.creator === nickname).length >= 2)}
+                          className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 disabled:pointer-events-none active:scale-98 shadow-lg shadow-purple-600/10 flex items-center justify-center gap-1.5"
+                        >
+                          <Coins className="w-4 h-4" /> Deduct 49999 AP &amp; Create Role
+                        </button>
+                      </Tooltip>
                     )}
                   </div>
 
                   {/* Warning banner */}
-                  {points < 350 && isLoggedIn && (
+                  {serverRoles.filter(r => r.creator === nickname).length >= 2 && isLoggedIn && (
+                    <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-[10px] text-red-400 leading-normal flex items-start gap-1.5">
+                      <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5 text-red-400" />
+                      <span>You have reached the limit of 2 custom roles. You cannot purchase or create any more custom roles.</span>
+                    </div>
+                  )}
+
+                  {points < 350 && isLoggedIn && serverRoles.filter(r => r.creator === nickname).length < 2 && (
                     <div className="p-3 rounded-lg bg-amber-500/5 border border-amber-500/10 text-[10px] text-amber-300 leading-normal flex items-start gap-1.5">
                       <ShieldAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                       <span>You do not have enough Aura Points (AP). Claim your Daily Reward or leave this website open in the AFK room to farm more!</span>
@@ -949,42 +1349,162 @@ export default function Shop({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {serverRoles.map((role) => (
-                <div
-                  key={role.id}
-                  className="p-4 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-800 transition-all flex items-center justify-between gap-4"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    {/* Role Icon */}
-                    <div className="w-8 h-8 rounded bg-zinc-900 border border-zinc-800 flex items-center justify-center text-base shrink-0 select-none">
-                      {role.icon ? (
-                        role.icon.startsWith('data:image') ? (
-                          <img src={role.icon} alt="" className="w-6 h-6 object-contain" />
-                        ) : (
-                          <span>{role.icon}</span>
-                        )
-                      ) : (
-                        <Sparkle className="w-4 h-4" style={{ color: role.color }} />
-                      )}
-                    </div>
+              {serverRoles.map((role) => {
+                const isEditing = editingRoleId === role.id;
+                
+                return (
+                  <div
+                    key={role.id}
+                    className="p-4 rounded-xl border border-zinc-900 bg-zinc-950/20 hover:border-zinc-800 transition-all flex flex-col gap-3"
+                  >
+                    {isEditing ? (
+                      // INLINE EDIT FORM FOR 500 AP
+                      <div className="space-y-3 w-full">
+                        <div className="flex justify-between items-center border-b border-zinc-900 pb-2">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-amber-400 font-bold flex items-center gap-1">
+                            ✏️ Edit Style (-500 AP)
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setEditingRoleId(null)}
+                            className="text-[10px] text-zinc-500 hover:text-zinc-300 font-mono"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                        
+                        {/* New Color Selection */}
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-mono text-zinc-400 uppercase">Role Color:</label>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="color"
+                              value={editRoleColor}
+                              onChange={(e) => setEditRoleColor(e.target.value)}
+                              className="w-8 h-8 rounded border border-zinc-800 bg-zinc-900 cursor-pointer p-0.5"
+                            />
+                            <span className="text-xs font-mono text-zinc-300 uppercase">{editRoleColor}</span>
+                          </div>
+                        </div>
 
-                    {/* Text block */}
-                    <div className="min-w-0">
-                      <h4 className="text-xs font-bold truncate" style={{ color: role.color }}>
-                        {role.roleName}
-                      </h4>
-                      <p className="text-[10px] text-zinc-500 truncate mt-0.5">
-                        By <span className="text-zinc-400 font-bold">{role.creator}</span>
-                      </p>
-                    </div>
-                  </div>
+                        {/* New Icon Selection */}
+                        <div className="space-y-1">
+                          <label className="text-[9px] font-mono text-zinc-400 uppercase">Role Icon (Emoji/Char):</label>
+                          <div className="flex gap-1.5 items-center">
+                            <input
+                              type="text"
+                              maxLength={2}
+                              value={editRoleIcon}
+                              onChange={(e) => setEditRoleIcon(e.target.value)}
+                              className="w-12 py-1 px-1.5 rounded bg-zinc-900 border border-zinc-800 text-xs text-center font-bold text-white focus:outline-none focus:border-purple-500"
+                            />
+                            <div className="flex flex-wrap gap-1">
+                              {['⭐', '👑', '💎', '🔥', '⚡', '🌸', '🍒', '🔮', '⚔️'].map((emo) => (
+                                <button
+                                  key={emo}
+                                  type="button"
+                                  onClick={() => setEditRoleIcon(emo)}
+                                  className={`w-5 h-5 rounded text-xs flex items-center justify-center bg-zinc-900 hover:bg-zinc-800 border ${
+                                    editRoleIcon === emo ? 'border-purple-500' : 'border-zinc-800'
+                                  }`}
+                                >
+                                  {emo}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
 
-                  {/* Position Tag */}
-                  <div className="px-2 py-1 rounded bg-[#ff73fa]/5 border border-[#ff73fa]/20 text-[9px] font-bold text-[#ff73fa] font-mono whitespace-nowrap">
-                    Above Booster
+                        <button
+                          type="button"
+                          disabled={isEditingRole || points < 500}
+                          onClick={() => handleEditRole(role.id)}
+                          className="w-full py-2 rounded-lg bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-black text-xs font-bold uppercase transition-all flex items-center justify-center gap-1 shadow-lg shadow-amber-500/5 mt-1"
+                        >
+                          {isEditingRole ? (
+                            <>
+                              <span className="w-3 h-3 border border-black border-t-transparent rounded-full animate-spin" />
+                              Saving...
+                            </>
+                          ) : (
+                            <>
+                              <Coins className="w-3.5 h-3.5" /> Save Style (-500 AP)
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    ) : (
+                      // NORMAL ROLE CARD VIEW
+                      <>
+                        <div className="flex items-center justify-between gap-3 w-full">
+                          <div className="flex items-center gap-3 min-w-0">
+                            {/* Role Icon */}
+                            <div className="w-8 h-8 rounded bg-zinc-900 border border-zinc-800 flex items-center justify-center text-base shrink-0 select-none">
+                              {role.icon ? (
+                                role.icon.startsWith('data:image') ? (
+                                  <img src={role.icon} alt="" className="w-6 h-6 object-contain" />
+                                ) : (
+                                  <span>{role.icon}</span>
+                                )
+                              ) : (
+                                <Sparkle className="w-4 h-4" style={{ color: role.color }} />
+                              )}
+                            </div>
+
+                            {/* Text block */}
+                            <div className="min-w-0">
+                              <h4 className="text-xs font-bold truncate" style={{ color: role.color }}>
+                                {role.roleName}
+                              </h4>
+                              <p className="text-[10px] text-zinc-500 truncate mt-0.5">
+                                By <span className="text-zinc-400 font-bold">{role.creator}</span>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="px-2 py-1 rounded bg-[#ff73fa]/5 border border-[#ff73fa]/20 text-[9px] font-bold text-[#ff73fa] font-mono whitespace-nowrap">
+                            Above Booster
+                          </div>
+                        </div>
+
+                        {/* Owner buttons row */}
+                        {isLoggedIn && nickname === role.creator && (
+                          <div className="flex gap-2 border-t border-zinc-900/60 pt-2.5 mt-0.5 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingRoleId(role.id);
+                                setEditRoleColor(role.color || '#ffffff');
+                                setEditRoleIcon(role.icon || '⭐');
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/5 border border-amber-500/10 hover:border-amber-500/25 transition-all flex items-center gap-1"
+                              title="Change color and icon for 500 AP"
+                            >
+                              ✏️ Edit Style (500 AP)
+                            </button>
+
+                            <button
+                              type="button"
+                              disabled={deletingRoleId === role.id}
+                              onClick={() => handleDeleteRole(role.id)}
+                              className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold text-red-400 hover:text-red-300 bg-red-950/20 border border-red-900/30 hover:border-red-900/50 hover:bg-red-950/40 transition-all flex items-center gap-1 disabled:opacity-50"
+                              title="Delete this role from server"
+                            >
+                              {deletingRoleId === role.id ? (
+                                <span className="w-3.5 h-3.5 border border-red-400 border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <>
+                                  <Trash2 className="w-3.5 h-3.5" /> Delete Role
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

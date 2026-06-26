@@ -65,13 +65,22 @@ export default function Staff() {
               <div className="absolute top-0 left-0 w-24 h-24 bg-purple-500/5 rounded-full blur-xl pointer-events-none group-hover:bg-purple-500/10 transition-colors" />
 
               <div className="space-y-4">
-                {/* Custom Avatar with gradient */}
-                <div className="relative mx-auto w-16 h-16 rounded-full flex items-center justify-center p-0.5 border-2 border-zinc-800 group-hover:border-purple-500/40 transition-colors">
-                  <div className={`w-full h-full rounded-full bg-gradient-to-tr ${member.color} flex items-center justify-center text-white font-black text-lg tracking-wider font-mono shadow-md`}>
-                    {initials}
-                  </div>
+                {/* Custom Avatar with gradient / profile pic */}
+                <div className="relative mx-auto w-16 h-16 rounded-full flex items-center justify-center p-0.5 border-2 border-zinc-800 bg-zinc-950 group-hover:border-purple-500/40 transition-colors overflow-hidden">
+                  {member.avatarUrl ? (
+                    <img 
+                      src={member.avatarUrl} 
+                      alt={member.name} 
+                      className="w-full h-full rounded-full object-cover shadow-md"
+                      referrerPolicy="no-referrer"
+                    />
+                  ) : (
+                    <div className={`w-full h-full rounded-full bg-gradient-to-tr ${member.color} flex items-center justify-center text-white font-black text-lg tracking-wider font-mono shadow-md`}>
+                      {initials}
+                    </div>
+                  )}
                   {/* Glowing Indicator for Live Staff Tagline */}
-                  <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-zinc-950 rounded-full" />
+                  <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-zinc-950 rounded-full z-10" />
                 </div>
 
                 <div className="space-y-1">

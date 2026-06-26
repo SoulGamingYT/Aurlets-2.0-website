@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Clock, UserCheck, Flame, Sparkles, LogIn, Trophy, Award } from 'lucide-react';
 import { DiscordIcon } from './Icons';
+import { Tooltip } from './Tooltip';
 
 interface LeaderboardUser {
   name: string;
@@ -37,6 +38,22 @@ export default function AFKFarming({
   // Real-time live leaderboard
   const [leaderboard, setLeaderboard] = useState<LeaderboardUser[]>([]);
 
+  // Loaded dynamically from localStorage
+  const [userColor, setUserColor] = useState<string | null>(null);
+  const [hasFrame, setHasFrame] = useState<boolean>(false);
+  const [userFrameColor, setUserFrameColor] = useState<string>('#a855f7');
+
+  useEffect(() => {
+    const syncStyles = () => {
+      setUserColor(localStorage.getItem('aurlets_unlocked_color'));
+      setHasFrame(localStorage.getItem('aurlets_unlocked_frame') === 'true');
+      setUserFrameColor(localStorage.getItem('aurlets_frame_color') || '#a855f7');
+    };
+    syncStyles();
+    window.addEventListener('storage', syncStyles);
+    return () => window.removeEventListener('storage', syncStyles);
+  }, []);
+
   // Auto-start farming if logged in
   useEffect(() => {
     if (isLoggedIn) {
@@ -59,7 +76,7 @@ export default function AFKFarming({
           }
         }
       } catch (err) {
-        console.error('Error fetching AFK leaderboard:', err);
+        console.warn('Error fetching AFK leaderboard:', err);
       }
     };
 
@@ -79,7 +96,7 @@ export default function AFKFarming({
             body: JSON.stringify({ name: nickname, points, avatarUrl })
           });
         } catch (err) {
-          console.error('Error sending AFK ping:', err);
+          console.warn('Error sending AFK ping:', err);
         }
       };
 
@@ -154,12 +171,14 @@ export default function AFKFarming({
                 </div>
 
                 <div className="space-y-3 pt-2">
-                  <button
-                    onClick={onOpenAuthModal}
-                    className="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-xs uppercase tracking-wider active:scale-95 flex items-center justify-center gap-2"
-                  >
-                    <LogIn className="w-4 h-4" /> Connect Your Profile
-                  </button>
+                  <Tooltip content="Sign in via Discord or as guest to unlock leaderboards & shop" position="top">
+                    <button
+                      onClick={onOpenAuthModal}
+                      className="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-xs uppercase tracking-wider active:scale-95 flex items-center justify-center gap-2"
+                    >
+                      <LogIn className="w-4 h-4" /> Connect Your Profile
+                    </button>
+                  </Tooltip>
                 </div>
               </motion.div>
             ) : (
@@ -180,13 +199,25 @@ export default function AFKFarming({
                     <img 
                       src={avatarUrl} 
                       alt={nickname} 
-                      className="w-16 h-16 rounded-full border-2 border-purple-500/40 shadow-lg object-cover" 
+                      className="w-16 h-16 rounded-full object-cover shadow-lg relative z-10" 
+                      style={hasFrame ? {
+                        border: `2.5px solid ${userFrameColor}`,
+                        boxShadow: `0 0 16px ${userFrameColor}80, inset 0 0 8px ${userFrameColor}40`
+                      } : {
+                        border: '2.5px solid var(--color-purple-500)'
+                      }}
                       referrerPolicy="no-referrer"
                     />
-                    <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-zinc-950 rounded-full" />
+                    {hasFrame && (
+                      <div className="absolute inset-0 rounded-full animate-ping pointer-events-none opacity-30 z-0" style={{ border: `2px solid ${userFrameColor}` }} />
+                    )}
+                    <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-emerald-500 border-2 border-zinc-950 rounded-full z-20" />
                   </div>
                   <div className="space-y-0.5">
-                    <h3 className="text-lg font-bold text-white flex items-center gap-1.5 justify-center">
+                    <h3 
+                      className="text-lg font-bold flex items-center gap-1.5 justify-center"
+                      style={userColor ? { color: userColor } : { color: 'var(--color-white)' }}
+                    >
                       {nickname} <Sparkles className="w-4 h-4 text-purple-400" />
                     </h3>
                     <p className="text-xs text-zinc-500 font-mono uppercase tracking-widest font-semibold">Live farming...</p>
@@ -208,24 +239,29 @@ export default function AFKFarming({
                   </div>
                 </div>
 
-                {/* Action Controls */}
+                 {/* Action Controls */}
                 <div className="flex justify-center gap-4 relative z-10 pt-2">
-                  <button
-                    onClick={() => setIsFarming(!isFarming)}
-                    className={`px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 shadow ${
-                      isFarming 
-                        ? 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white' 
-                        : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                    }`}
-                  >
-                    {isFarming ? 'Pause Session' : 'Resume Session'}
-                  </button>
-                  <button
-                    onClick={handleResetScore}
-                    className="px-6 py-2.5 rounded-xl bg-rose-950/40 border border-rose-900/50 hover:border-rose-900 text-rose-300 text-xs font-bold transition-all active:scale-95"
-                  >
-                    Reset Score
-                  </button>
+                  <Tooltip content={isFarming ? "Temporarily halt farming points" : "Start accumulating points automatically"} position="top">
+                    <button
+                      onClick={() => setIsFarming(!isFarming)}
+                      className={`px-6 py-2.5 rounded-xl font-bold text-xs transition-all active:scale-95 shadow ${
+                        isFarming 
+                          ? 'bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white' 
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                      }`}
+                    >
+                      {isFarming ? 'Pause Session' : 'Resume Session'}
+                    </button>
+                  </Tooltip>
+                  
+                  <Tooltip content="Reset your points balance back to 0" position="top">
+                    <button
+                      onClick={handleResetScore}
+                      className="px-6 py-2.5 rounded-xl bg-rose-950/40 border border-rose-900/50 hover:border-rose-900 text-rose-300 text-xs font-bold transition-all active:scale-95"
+                    >
+                      Reset Score
+                    </button>
+                  </Tooltip>
                 </div>
 
                 {/* Simulated Google AdSpace */}
@@ -273,12 +309,23 @@ export default function AFKFarming({
                     <img 
                       src={user.avatarUrl} 
                       alt={user.name} 
-                      className="w-8 h-8 rounded-full object-cover border border-zinc-800 shrink-0" 
+                      className="w-8 h-8 rounded-full object-cover shrink-0 animate-[pulse_3s_infinite]" 
+                      style={user.name === nickname && hasFrame ? {
+                        border: `1.5px solid ${userFrameColor}`,
+                        boxShadow: `0 0 8px ${userFrameColor}80`
+                      } : {
+                        border: '1px solid var(--color-zinc-800)'
+                      }}
                       referrerPolicy="no-referrer"
                     />
                     
                     {/* Name */}
-                    <span className="text-xs font-bold text-zinc-100 truncate">{user.name}</span>
+                    <span 
+                      className="text-xs font-bold truncate"
+                      style={user.name === nickname && userColor ? { color: userColor } : { color: 'var(--color-zinc-100)' }}
+                    >
+                      {user.name}
+                    </span>
                   </div>
 
                   {/* Score */}
