@@ -6,6 +6,14 @@ import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { startDiscordBot } from './discord-bot.js';
 
+// Global error handlers for process stabilization
+process.on('uncaughtException', (err) => {
+  console.error('[UNCAUGHT EXCEPTION GLOBAL]', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[UNHANDLED REJECTION GLOBAL] at:', promise, 'reason:', reason);
+});
+
 // Type definitions
 interface Player {
   id: string;
@@ -46,6 +54,13 @@ async function startServer() {
 
   // --- IN-MEMORY BACKEND STATE ---
   let farmers: Record<string, Farmer> = {};
+  let puzzleImages: Array<{
+    id: string;
+    url: string;
+    uploadedBy: string;
+    approved: boolean;
+    createdAt: number;
+  }> = [];
   let lastDailyClaims: Record<string, number> = {}; // username -> timestamp
   let customRoles: Array<{
     id: string;
@@ -110,7 +125,8 @@ async function startServer() {
         dailyBetEarnings,
         auditReports,
         lastAuditTimestamp,
-        discordBotSecret
+        discordBotSecret,
+        puzzleImages
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -131,6 +147,17 @@ async function startServer() {
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
         if (parsed.lastAuditTimestamp) lastAuditTimestamp = parsed.lastAuditTimestamp;
+        if (parsed.puzzleImages) {
+          puzzleImages = parsed.puzzleImages;
+        } else {
+          puzzleImages = [
+            { id: 'img_default1', url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() },
+            { id: 'img_default2', url: 'https://images.unsplash.com/photo-1515260268569-9271009adfdb?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() },
+            { id: 'img_default3', url: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() },
+            { id: 'img_default4', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() }
+          ];
+          saveData();
+        }
         if (parsed.discordBotSecret) {
           discordBotSecret = parsed.discordBotSecret;
         } else {
@@ -162,9 +189,138 @@ async function startServer() {
 
   loadData();
 
+  // Webhook activity logging for channel 1491811085613928571
+  let botInstance: any = null;
+
+  async function postToActivityWebhook(content: string | null, embed?: any) {
+    const channelId = '1491811085613928571';
+    let webhookUrl: string | null = null;
+
+    // Check if Discord client is ready and has channel access
+    if (botInstance && botInstance.isReady()) {
+      try {
+        const channel = await botInstance.channels.fetch(channelId);
+        if (channel && channel.isTextBased() && 'fetchWebhooks' in channel) {
+          const webhooks = await (channel as any).fetchWebhooks();
+          let webhook = webhooks.find((wh: any) => wh.owner?.id === botInstance.user?.id);
+          if (!webhook) {
+            webhook = await (channel as any).createWebhook({
+              name: 'Aurlets Web Activity',
+              avatar: botInstance.user?.displayAvatarURL()
+            });
+          }
+          webhookUrl = webhook.url;
+        }
+      } catch (err) {
+        console.error('[WEBHOOK HELPER] Could not dynamically get/create webhook:', err);
+      }
+    }
+
+    // Fallback if bot is not loaded / ready
+    if (!webhookUrl) {
+      webhookUrl = process.env.ACTIVITY_WEBHOOK_URL || null;
+    }
+
+    if (!webhookUrl) {
+      console.warn('[WEBHOOK LOG] Webhook URL not available. Ensure bot has Manage Webhooks permission or ACTIVITY_WEBHOOK_URL is configured.');
+      return;
+    }
+
+    try {
+      const payload: any = {};
+      if (content) payload.content = content;
+      if (embed) payload.embeds = [embed];
+
+      const response = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        console.error('[WEBHOOK LOG] Discord Webhook API error:', await response.text());
+      }
+    } catch (err) {
+      console.error('[WEBHOOK LOG] Failed to post to activity webhook:', err);
+    }
+  }
+
+  const logActivity = (title: string, description: string, color: number = 3066993) => {
+    const embed = {
+      title,
+      description,
+      color,
+      timestamp: new Date().toISOString(),
+      footer: {
+        text: "Aurlets Website Activity"
+      }
+    };
+    postToActivityWebhook(null, embed).catch(e => console.error(e));
+  };
+
+  // Automatic backups every 2 hours (2 * 60 * 60 * 1000 = 7200000 ms)
+  const BACKUP_DIR = path.join(process.cwd(), 'backups');
+  const BACKUP_INTERVAL_MS = 2 * 60 * 60 * 1000;
+
+  function createBackup() {
+    try {
+      if (!fs.existsSync(BACKUP_DIR)) {
+        fs.mkdirSync(BACKUP_DIR, { recursive: true });
+      }
+
+      const payload = {
+        farmers,
+        lastDailyClaims,
+        customRoles,
+        redeemCodes,
+        presetRolePurchases,
+        dailyTransfers,
+        dailyBetEarnings,
+        auditReports,
+        lastAuditTimestamp,
+        discordBotSecret
+      };
+
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupPath = path.join(BACKUP_DIR, `backup-${timestamp}.json`);
+      fs.writeFileSync(backupPath, JSON.stringify(payload, null, 2), 'utf-8');
+      console.log(`[BACKUP] Backup created successfully: ${backupPath}`);
+
+      // Keep at least previous 10 backups
+      const files = fs.readdirSync(BACKUP_DIR);
+      const backupFiles = files
+        .filter(f => f.startsWith('backup-') && f.endsWith('.json'))
+        .map(f => ({
+          name: f,
+          path: path.join(BACKUP_DIR, f),
+          time: fs.statSync(path.join(BACKUP_DIR, f)).mtime.getTime()
+        }))
+        .sort((a, b) => b.time - a.time);
+
+      if (backupFiles.length > 10) {
+        const toDelete = backupFiles.slice(10);
+        for (const file of toDelete) {
+          try {
+            fs.unlinkSync(file.path);
+            console.log(`[BACKUP] Old backup deleted: ${file.name}`);
+          } catch (unlinkErr) {
+            console.error(`[BACKUP] Failed to delete old backup ${file.name}:`, unlinkErr);
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[BACKUP] Error during backup creation:', err);
+    }
+  }
+
+  // Set interval for backups
+  setInterval(createBackup, BACKUP_INTERVAL_MS);
+  // Also run an initial backup after 15 seconds to make sure it functions correctly
+  setTimeout(createBackup, 15000);
+
   // Start background Discord Gateway bot
   try {
-    startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData);
+    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages);
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
@@ -276,13 +432,18 @@ async function startServer() {
     const winner = activeKPlayers[closestIndex];
     const loser = activeKPlayers[furthestIndex];
 
-    addLog('kotd', `⭐ Closest: ${winner.name} (submitted ${(winner.lastSubmit || 0).toFixed(2)}) wins +1 Point!`, 'success');
-    addLog('kotd', `💔 Furthest: ${loser.name} (submitted ${(loser.lastSubmit || 0).toFixed(2)}) loses 1 Life!`, 'danger');
+    addLog('kotd', `⭐ Closest: ${winner.name} (submitted ${(winner.lastSubmit || 0).toFixed(2)}) wins +2 Aura Points!`, 'success');
+    addLog('kotd', `💔 Furthest: ${loser.name} (submitted ${(loser.lastSubmit || 0).toFixed(2)}) loses 1 Heart!`, 'danger');
+
+    // Update round-winner's economy points
+    if (farmers[winner.name]) {
+      farmers[winner.name].points = (farmers[winner.name].points || 0) + 2;
+    }
 
     // Update state and prune dead players
     activeKPlayers.forEach(p => {
       if (p.id === winner.id) {
-        p.score += 1;
+        p.score += 2; // Increase match scoreboard score
       }
       if (p.id === loser.id) {
         p.lives = (p.lives || 5) - 1;
@@ -293,7 +454,7 @@ async function startServer() {
     // Print eliminations
     activeKPlayers.forEach(p => {
       if ((p.lives || 0) <= 0) {
-        addLog('kotd', `Eliminated: ${p.name} has run out of lives!`, 'danger');
+        addLog('kotd', `Eliminated: ${p.name} has run out of Hearts!`, 'danger');
         delete kotdPlayers[p.id];
       }
     });
@@ -302,7 +463,16 @@ async function startServer() {
 
     // 3. Check for match victory
     if (survivors.length === 1) {
-      addLog('kotd', `🏆 MATCH OVER! ${survivors[0].name} is the last standing and wins the crown!`, 'success');
+      const champion = survivors[0];
+      if (farmers[champion.name]) {
+        farmers[champion.name].points = (farmers[champion.name].points || 0) + 10;
+      }
+      addLog('kotd', `🏆 MATCH OVER! ${champion.name} is the last standing and wins the crown (+10 AP)!`, 'success');
+      logActivity(
+        '👑 KOTD Game Champion',
+        `**${champion.name}** won the King of Diamonds session! Gained **+10 AP** (Total: **${farmers[champion.name]?.points?.toLocaleString()} AP** 💰).`,
+        10181046
+      );
       kotdPlaying = false;
     } else if (survivors.length === 0) {
       addLog('kotd', '💀 MATCH OVER! All players have been eliminated. Sudden Death!', 'danger');
@@ -317,6 +487,8 @@ async function startServer() {
         addLog('kotd', `Round ${kotdRound} started! Enter strategy number from 0 to 100`, 'warning');
       }, 5000);
     }
+
+    saveData();
   };
 
   // --- BACKGROUND GAME TIMER TICK ---
@@ -542,6 +714,131 @@ async function startServer() {
       }
     }
     res.json({ success: true });
+  });
+
+  // --- PUZZLE GAME ENDPOINTS ---
+  app.get('/api/puzzle/images', (req, res) => {
+    res.json(puzzleImages.filter(img => img.approved));
+  });
+
+  app.get('/api/puzzle/pending', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    res.json(puzzleImages.filter(img => !img.approved));
+  });
+
+  app.post('/api/puzzle/upload', (req, res) => {
+    const { url, name } = req.body;
+    if (!url || !name) {
+      return res.status(400).json({ error: 'Missing url or uploader name.' });
+    }
+    
+    // Check if duplicate url
+    const exists = puzzleImages.some(img => img.url === url);
+    if (exists) {
+      return res.status(400).json({ error: 'This image has already been submitted!' });
+    }
+
+    const newImg = {
+      id: 'img_' + Math.random().toString(36).substring(2, 11),
+      url,
+      uploadedBy: name,
+      approved: false,
+      createdAt: Date.now()
+    };
+    
+    puzzleImages.push(newImg);
+    saveData();
+
+    logActivity(
+      '🧩 Puzzle Image Submitted',
+      `**${name}** submitted a custom puzzle image/PFP for approval!\n` +
+      `It is pending review in the Admin Panel.`,
+      10181046
+    );
+
+    res.json({ success: true, image: newImg });
+  });
+
+  app.post('/api/puzzle/approve', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { id } = req.body;
+    const img = puzzleImages.find(i => i.id === id);
+    if (!img) {
+      return res.status(404).json({ error: 'Image not found.' });
+    }
+
+    img.approved = true;
+    saveData();
+
+    logActivity(
+      '🧩 Puzzle Image Approved',
+      `Custom puzzle image uploaded by **${img.uploadedBy}** has been **APPROVED** by an administrator and is now playable!`,
+      3066993
+    );
+
+    res.json({ success: true, image: img });
+  });
+
+  app.post('/api/puzzle/reject', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { id } = req.body;
+    const idx = puzzleImages.findIndex(i => i.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Image not found.' });
+    }
+
+    const deleted = puzzleImages.splice(idx, 1)[0];
+    saveData();
+
+    logActivity(
+      '🧩 Puzzle Image Rejected',
+      `Custom puzzle image uploaded by **${deleted.uploadedBy}** has been rejected/deleted by an administrator.`,
+      15158332
+    );
+
+    res.json({ success: true });
+  });
+
+  app.post('/api/puzzle/complete', (req, res) => {
+    const { name, gridSize } = req.body;
+    if (!name || !gridSize) {
+      return res.status(400).json({ error: 'Missing name or gridSize.' });
+    }
+
+    let farmer = farmers[name];
+    if (!farmer) {
+      // Auto register if missing
+      farmers[name] = {
+        name,
+        points: 0,
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: Date.now()
+      };
+      farmer = farmers[name];
+    }
+
+    // Determine rewards
+    let rewardPoints = 10;
+    if (gridSize === 4) rewardPoints = 20;
+    if (gridSize === 5) rewardPoints = 30;
+
+    farmer.points = (farmer.points || 0) + rewardPoints;
+    saveData();
+
+    logActivity(
+      '🧩 Puzzle Solved!',
+      `**${name}** has successfully solved a **${gridSize}x${gridSize}** slide puzzle!\n` +
+      `Gained **+${rewardPoints} AP** (Balance: **${farmer.points.toLocaleString()} AP** 💰).`,
+      3066993
+    );
+
+    res.json({ success: true, rewardPoints, newPoints: farmer.points });
   });
 
   // --- BETTING MINI-GAMES ENDPOINTS ---
@@ -801,6 +1098,13 @@ async function startServer() {
 
     saveData();
 
+    logActivity(
+      '📆 Website Daily Claim',
+      `**${name}** has claimed their daily reward on the website!\n` +
+      `Gained **+${rewardAmount} AP** (Streak: **${farmers[name].streak || 1} days** 🔥).`,
+      3066993
+    );
+
     res.json({
       success: true,
       rewardAmount,
@@ -930,6 +1234,13 @@ async function startServer() {
     });
 
     saveData();
+
+    logActivity(
+      '✨ Custom Role Purchased',
+      `**${name}** has purchased a custom role **"${roleName}"** with color **${color}**!\n` +
+      `Paid **-49,999 AP** (Current Balance: **${newPoints.toLocaleString()} AP**).`,
+      10181046
+    );
 
     res.json({
       success: true,
@@ -1323,6 +1634,13 @@ async function startServer() {
 
     saveData();
 
+    logActivity(
+      '🏅 Preset Role Purchased',
+      `**${name}** has purchased the preset role **"${targetRole.name}"**!\n` +
+      `Paid **-${cost.toLocaleString()} AP** (Current Balance: **${newPoints.toLocaleString()} AP**).`,
+      10181046
+    );
+
     res.json({
       success: true,
       roleId,
@@ -1487,6 +1805,13 @@ async function startServer() {
 
     saveData();
 
+    logActivity(
+      '💸 Points Transferred',
+      `**${senderName}** has transferred **${transferAmount.toLocaleString()} AP** to **${targetFarmer.name}**!\n` +
+      `Sender Remaining: **${sender.points.toLocaleString()} AP** | Recipient Balance: **${targetFarmer.points.toLocaleString()} AP**.`,
+      3447003
+    );
+
     res.json({
       success: true,
       newPoints: sender.points,
@@ -1607,6 +1932,13 @@ async function startServer() {
     }
 
     saveData();
+
+    logActivity(
+      '🎁 Promo Code Redeemed',
+      `**${name}** has successfully redeemed promo code **"${cleanCode}"** on the website!\n` +
+      `Gained **+${codeItem.rewardAmount.toLocaleString()} AP** (Current Balance: **${farmers[name].points.toLocaleString()} AP**).`,
+      3066993
+    );
 
     res.json({
       success: true,

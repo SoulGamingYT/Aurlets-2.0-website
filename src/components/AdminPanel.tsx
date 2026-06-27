@@ -14,7 +14,9 @@ import {
   UserCheck,
   Database,
   Download,
-  Upload
+  Upload,
+  Image,
+  X
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -54,7 +56,11 @@ export default function AdminPanel({
   discordConfigured,
   onPointsUpdated
 }: AdminPanelProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup'>('users');
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles'>('users');
+  
+  // States for Puzzle Images approval
+  const [pendingPuzzles, setPendingPuzzles] = useState<Array<{ id: string; url: string; uploadedBy: string; approved: boolean; createdAt: number }>>([]);
+  const [isLoadingPuzzles, setIsLoadingPuzzles] = useState(false);
   
   // States for Backup/Restore system
   const [isExporting, setIsExporting] = useState(false);
@@ -136,6 +142,77 @@ export default function AdminPanel({
       console.error(err);
     } finally {
       setIsLoadingCodes(false);
+    }
+  };
+
+  const fetchPendingPuzzles = async () => {
+    setIsLoadingPuzzles(true);
+    try {
+      const res = await fetch(`/api/puzzle/pending?adminDiscordId=${adminDiscordId}&adminUsername=${adminUsername}`, {
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingPuzzles(data);
+      } else {
+        const err = await res.text();
+        console.error('Failed to load pending puzzles:', err);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsLoadingPuzzles(false);
+    }
+  };
+
+  const approvePuzzle = async (id: string) => {
+    try {
+      const res = await fetch('/api/puzzle/approve', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ id, adminDiscordId, adminUsername })
+      });
+      if (res.ok) {
+        showNotice('Custom puzzle image approved successfully!');
+        setPendingPuzzles(prev => prev.filter(p => p.id !== id));
+      } else {
+        const errData = await res.json();
+        showNotice(errData.error || 'Failed to approve image', 'error');
+      }
+    } catch (err) {
+      console.error('[APPROVE ERROR]', err);
+      showNotice('Network error approving puzzle image', 'error');
+    }
+  };
+
+  const rejectPuzzle = async (id: string) => {
+    try {
+      const res = await fetch('/api/puzzle/reject', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ id, adminDiscordId, adminUsername })
+      });
+      if (res.ok) {
+        showNotice('Custom puzzle image rejected and deleted.');
+        setPendingPuzzles(prev => prev.filter(p => p.id !== id));
+      } else {
+        const errData = await res.json();
+        showNotice(errData.error || 'Failed to reject image', 'error');
+      }
+    } catch (err) {
+      console.error('[REJECT ERROR]', err);
+      showNotice('Network error rejecting puzzle image', 'error');
     }
   };
 

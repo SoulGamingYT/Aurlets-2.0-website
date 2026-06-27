@@ -216,7 +216,15 @@ export function startDiscordBot(
     redeemedBy: string[];
     createdAt: number;
   }>,
-  saveData: () => void
+  saveData: () => void,
+  logActivity?: (title: string, description: string, color?: number) => void,
+  puzzleImages?: Array<{
+    id: string;
+    url: string;
+    uploadedBy: string;
+    approved: boolean;
+    createdAt: number;
+  }>
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
@@ -228,9 +236,45 @@ export function startDiscordBot(
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.MessageContent
+      GatewayIntentBits.MessageContent,
+      GatewayIntentBits.GuildMembers,
+      GatewayIntentBits.GuildInvites,
+      GatewayIntentBits.GuildVoiceStates
     ]
   });
+
+  // Client error handlers for stability ("bot works sometime and sometime not")
+  client.on('error', (err) => {
+    console.error('[DISCORD BOT GATEWAY ERROR]', err);
+  });
+
+  client.on('shardError', (err) => {
+    console.error('[DISCORD BOT SHARD ERROR]', err);
+  });
+
+  // Cache of invites: guildId -> Map<inviteCode, inviteUses>
+  const guildInvites = new Map<string, Map<string, number>>();
+
+  // Helper to fetch and cache invites for a guild
+  const cacheGuildInvites = async (guildId: string) => {
+    try {
+      const guild = client.guilds.cache.get(guildId);
+      if (!guild) return;
+      const invites = await guild.invites.fetch();
+      const codeUses = new Map<string, number>();
+      invites.forEach(inv => {
+        codeUses.set(inv.code, inv.uses || 0);
+      });
+      guildInvites.set(guildId, codeUses);
+      console.log(`[INVITES] Cached ${invites.size} invites for guild: ${guild.name} (${guildId})`);
+    } catch (err) {
+      console.warn(`[INVITES] Could not cache invites for guild ${guildId}:`, err);
+    }
+  };
+
+  // Activity rate limiting & counter maps
+  const lastMessageTime = new Map<string, number>();
+  const userMessageCounts = new Map<string, number>();
 
   // Helper: Find farmer by Discord ID
   const findFarmerByDiscordId = (discordId: string): Farmer | null => {
@@ -273,13 +317,202 @@ export function startDiscordBot(
     return farmer;
   };
 
-  client.once('ready', () => {
+  client.once('ready', async () => {
     console.log(`[DISCORD BOT] Logged in successfully as ${client.user?.tag}! Listening to economy commands starting with '+' prefix.`);
+
+    // Cache invites for target server 1392526036520009779
+    await cacheGuildInvites('1392526036520009779');
+
+    // Also cache for any other guilds the bot is in
+    for (const [id, guild] of client.guilds.cache) {
+      if (id !== '1392526036520009779') {
+        await cacheGuildInvites(id);
+      }
+    }
+
+    // Send status update 5 seconds after boot to channel 1492412169931718656 for immediate testing
+    setTimeout(async () => {
+      try {
+        const channel = await client.channels.fetch('1492412169931718656');
+        if (channel && channel.isTextBased()) {
+          const totalFarmers = Object.keys(farmers).length;
+          const totalPoints = Object.values(farmers).reduce((sum, f) => sum + (f.points || 0), 0);
+          
+          const startupEmbed = new EmbedBuilder()
+            .setTitle('🟢 Aurlets Bot Status Update')
+            .setDescription('The Aurlets Economy bot has successfully initialized and is now active!')
+            .addFields(
+              { name: '🟢 Status', value: 'Online & Active', inline: true },
+              { name: '👥 Registered Farmers', value: `${totalFarmers}`, inline: true },
+              { name: '💰 Total Economy Wealth', value: `${totalPoints.toLocaleString()} AP`, inline: true }
+            )
+            .setColor(3066993)
+            .setTimestamp();
+          
+          await (channel as any).send({ embeds: [startupEmbed] });
+          console.log('[BOT STATUS] Initial boot status update sent to 1492412169931718656.');
+        }
+      } catch (err) {
+        console.error('[BOT STATUS] Failed to send initial status update:', err);
+      }
+    }, 5000);
+
+    // Set up Hourly status updates inside 1492412169931718656
+    setInterval(async () => {
+      try {
+        const channel = await client.channels.fetch('1492412169931718656');
+        if (channel && channel.isTextBased()) {
+          const totalFarmers = Object.keys(farmers).length;
+          const totalPoints = Object.values(farmers).reduce((sum, f) => sum + (f.points || 0), 0);
+          
+          const uptimeMs = client.uptime || 0;
+          const hours = Math.floor(uptimeMs / 3600000);
+          const mins = Math.floor((uptimeMs % 3600000) / 60000);
+          const uptimeStr = `${hours}h ${mins}m`;
+
+          const statusEmbed = new EmbedBuilder()
+            .setTitle('🤖 Aurlets Bot - Hourly Status')
+            .setDescription('The Aurlets Economy Bot is fully operational and healthy!')
+            .addFields(
+              { name: '🟢 Status', value: 'Online & Active', inline: true },
+              { name: '⏱️ Uptime', value: uptimeStr, inline: true },
+              { name: '👥 Registered Farmers', value: `${totalFarmers}`, inline: true },
+              { name: '💰 Total Economy Wealth', value: `${totalPoints.toLocaleString()} AP`, inline: true }
+            )
+            .setColor(3066993)
+            .setTimestamp();
+
+          await (channel as any).send({ embeds: [statusEmbed] });
+          console.log('[BOT STATUS] Hourly status update sent to 1492412169931718656.');
+        }
+      } catch (err) {
+        console.error('[BOT STATUS] Failed to send hourly status update:', err);
+      }
+    }, 3600000); // Hourly (3,600,000 ms)
+
+    // Set up VC activity reward scan (every 1 minute)
+    setInterval(async () => {
+      try {
+        const guild = client.guilds.cache.get('1392526036520009779');
+        if (!guild) return;
+
+        let awardedCount = 0;
+        guild.channels.cache.forEach((channel) => {
+          if (channel.isVoiceBased()) {
+            const activeMembers = channel.members.filter(m => !m.user.bot);
+            activeMembers.forEach((member) => {
+              const farmer = getOrCreateFarmerByDiscord(member.id, member.user.username);
+              farmer.points = (farmer.points || 0) + 1;
+              farmer.lastActive = Date.now();
+              awardedCount++;
+            });
+          }
+        });
+
+        if (awardedCount > 0) {
+          saveData();
+          console.log(`[VC ACTIVITY] Awarded 1 AP to ${awardedCount} members currently active in Voice Channels.`);
+        }
+      } catch (err) {
+        console.error('[VC ACTIVITY] Error in VC scanning loop:', err);
+      }
+    }, 60000); // 1 minute
+  });
+
+  // Keep invites cache in sync
+  client.on('inviteCreate', (invite) => {
+    if (!invite.guild) return;
+    const codeUses = guildInvites.get(invite.guild.id) || new Map<string, number>();
+    codeUses.set(invite.code, invite.uses || 0);
+    guildInvites.set(invite.guild.id, codeUses);
+  });
+
+  client.on('inviteDelete', (invite) => {
+    if (!invite.guild) return;
+    const codeUses = guildInvites.get(invite.guild.id);
+    if (codeUses) {
+      codeUses.delete(invite.code);
+    }
+  });
+
+  // Track member invites on join
+  client.on('guildMemberAdd', async (member) => {
+    if (member.guild.id !== '1392526036520009779') return;
+    try {
+      const cachedCodes = guildInvites.get(member.guild.id);
+      const newInvites = await member.guild.invites.fetch();
+      
+      let usedInvite = null;
+      if (cachedCodes) {
+        for (const [code, inv] of newInvites) {
+          const cachedUses = cachedCodes.get(code) || 0;
+          if ((inv.uses || 0) > cachedUses) {
+            usedInvite = inv;
+            break;
+          }
+        }
+      }
+      
+      // Update cache
+      const newCodes = new Map<string, number>();
+      newInvites.forEach(inv => {
+        newCodes.set(inv.code, inv.uses || 0);
+      });
+      guildInvites.set(member.guild.id, newCodes);
+      
+      if (usedInvite && usedInvite.inviter) {
+        const inviter = usedInvite.inviter;
+        const farmer = getOrCreateFarmerByDiscord(inviter.id, inviter.username);
+        
+        farmer.points = (farmer.points || 0) + 150;
+        farmer.invites = (farmer.invites || 0) + 1;
+        farmer.lastActive = Date.now();
+        saveData();
+        
+        console.log(`[INVITES] ${inviter.username} invited ${member.user.username}. Gained 150 AP.`);
+        
+        if (logActivity) {
+          logActivity(
+            '📥 New Discord Invite',
+            `**${inviter.username}** has invited **${member.user.username}** to the Discord Server!\n` +
+            `Awarded **+150 AP** (Total Invites: **${farmer.invites}** 👥).`,
+            3066993
+          );
+        }
+      }
+    } catch (err) {
+      console.error('[INVITES] Error tracking member invite on join:', err);
+    }
   });
 
   client.on('messageCreate', async (message: Message) => {
     // Ignore bots and webhooks
     if (message.author.bot) return;
+
+    // Award activity points for messages in guild 1392526036520009779
+    if (message.guild && message.guild.id === '1392526036520009779') {
+      const userId = message.author.id;
+      const now = Date.now();
+      const lastTime = lastMessageTime.get(userId) || 0;
+
+      // Cooldown of 2 seconds
+      if (now - lastTime >= 2000) {
+        lastMessageTime.set(userId, now);
+        const count = (userMessageCounts.get(userId) || 0) + 1;
+
+        // 1 point per 3 messages
+        if (count >= 3) {
+          userMessageCounts.set(userId, 0);
+          const farmer = getOrCreateFarmerByDiscord(userId, message.author.username);
+          farmer.points = (farmer.points || 0) + 1;
+          farmer.lastActive = now;
+          saveData();
+          console.log(`[ACTIVITY] Awarded 1 AP to ${message.author.username} for sending 3 messages.`);
+        } else {
+          userMessageCounts.set(userId, count);
+        }
+      }
+    }
 
     const content = message.content.trim();
     if (!content.startsWith('+')) return;
@@ -311,7 +544,8 @@ export function startDiscordBot(
       'remove',
       'set',
       'reset',
-      'purge'
+      'purge',
+      'puzzle'
     ]);
 
     if (!VALID_COMMANDS.has(commandName)) return;
@@ -402,7 +636,8 @@ export function startDiscordBot(
         `🪙 **Games & Gambling:**\n` +
         `• \`+cf <amount> [heads/tails]\` - Bet your AP on a coin flip. Capped at 10k/bet. (e.g. \`+cf 50 heads\`)\n` +
         `• \`+bj <amount>\` - Play Blackjack against the Dealer using buttons! Capped at 10k/bet. (e.g. \`+bj 100\`)\n` +
-        `• \`+slots <amount>\` - Spin the slot machine for big wins! Capped at 10k/bet. (e.g. \`+slots 50\`)\n\n` +
+        `• \`+slots <amount>\` - Spin the slot machine for big wins! Capped at 10k/bet. (e.g. \`+slots 50\`)\n` +
+        `• \`+puzzle deposit\` - Deposit an attached image (or reply to one) as a custom slide puzzle image!\n\n` +
         `💸 **Earning AP:**\n` +
         `• \`+beg\` - Beg generous strangers for pocket points (5 min cooldown).\n` +
         `• \`+work\` - Work funny jobs around the server to make a salary (30 min cooldown).\n` +
@@ -1840,10 +2075,89 @@ export function startDiscordBot(
       }
       return;
     }
+
+    // ==========================================
+    // 20. GAME: PUZZLE COMMAND
+    // ==========================================
+    if (commandName === 'puzzle') {
+      const subCommand = args[0]?.toLowerCase();
+      if (subCommand !== 'deposit') {
+        return sendError('Usage: `+puzzle deposit` with an attached image (or reply to a message containing one).');
+      }
+
+      let attachment = message.attachments.first();
+      
+      // If no attachment on this message, look up the referenced/replied message
+      if (!attachment && message.reference && message.reference.messageId) {
+        try {
+          const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+          attachment = repliedMsg.attachments.first();
+        } catch (err) {
+          console.error('[PUZZLE DEPOSIT] Error fetching replied message:', err);
+        }
+      }
+
+      if (!attachment) {
+        return sendError('❌ No image attachment found! Please attach an image or reply to a message with an attached image using `+puzzle deposit`.');
+      }
+
+      const isImage = attachment.contentType?.startsWith('image/') || 
+                      /\.(jpg|jpeg|png|webp|gif)$/i.test(attachment.url);
+      if (!isImage) {
+        return sendError('❌ The attached file is not a valid image. Supported formats: PNG, JPG, JPEG, WEBP, GIF.');
+      }
+
+      // Add to puzzleImages array if it exists
+      if (puzzleImages) {
+        // Check for duplicates
+        const exists = puzzleImages.some(img => img.url === attachment!.url);
+        if (exists) {
+          return sendError('⚠️ This image has already been submitted for approval!');
+        }
+
+        const newImg = {
+          id: 'img_' + Math.random().toString(36).substring(2, 11),
+          url: attachment.url,
+          uploadedBy: authorTag,
+          approved: false,
+          createdAt: Date.now()
+        };
+
+        puzzleImages.push(newImg);
+        saveData();
+
+        // Send a success embed
+        const successEmbed = new EmbedBuilder()
+          .setTitle('🧩 Puzzle Image Deposited!')
+          .setDescription(
+            `✅ Custom puzzle image has been successfully deposited by **${authorTag}**!\n\n` +
+            `It has been submitted for **Admin Approval**. Once approved, it will be playable by everyone on the web dashboard.`
+          )
+          .setThumbnail(attachment.url)
+          .setColor(3066993)
+          .setTimestamp();
+
+        await message.reply({ embeds: [successEmbed] });
+
+        // Log the activity
+        if (logActivity) {
+          logActivity(
+            '📥 Puzzle Image Deposited (Discord)',
+            `**${authorTag}** deposited a custom puzzle image via Discord for approval!`,
+            10181046
+          );
+        }
+      } else {
+        return sendError('❌ Puzzle database is currently offline or not initialized.');
+      }
+      return;
+    }
   });
 
   // Login to Discord
   client.login(token).catch((err) => {
     console.error('[DISCORD BOT] Failed to log in to Discord gateway:', err.message || err);
   });
+
+  return client;
 }
