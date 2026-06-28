@@ -177,21 +177,6 @@ export default function Home({ onNavigate }: HomeProps) {
               </li>
             </ul>
           </div>
-
-          {/* Quick Gift Link */}
-          <div 
-            onClick={() => onNavigate('gift')}
-            className="p-5 rounded-2xl bg-gradient-to-r from-pink-500/10 to-rose-500/10 border border-pink-500/20 hover:border-pink-500/40 cursor-pointer transition-all hover:scale-[1.02] shadow-md flex items-center justify-between group"
-          >
-            <div className="space-y-1">
-              <span className="text-xs font-semibold text-pink-400 uppercase tracking-wider font-mono">Exclusive Gift</span>
-              <h4 className="text-base font-bold text-white group-hover:text-pink-300 transition-colors">🌙 Open Aurlets Eid Letters</h4>
-              <p className="text-xs text-zinc-400">Made with ❤️ by @ded_inside13 • Click to view</p>
-            </div>
-            <div className="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-400 group-hover:bg-pink-500/30 transition-colors">
-              ✨
-            </div>
-          </div>
         </div>
       </div>
     </div>

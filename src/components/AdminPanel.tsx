@@ -60,7 +60,15 @@ export default function AdminPanel({
   
   // States for Puzzle Images approval
   const [pendingPuzzles, setPendingPuzzles] = useState<Array<{ id: string; url: string; uploadedBy: string; approved: boolean; createdAt: number }>>([]);
+  const [allPuzzles, setAllPuzzles] = useState<Array<{ id: string; url: string; uploadedBy: string; approved: boolean; createdAt: number }>>([]);
   const [isLoadingPuzzles, setIsLoadingPuzzles] = useState(false);
+  const [puzzleViewTab, setPuzzleViewTab] = useState<'pending' | 'approved'>('pending');
+  
+  const [directUrl, setDirectUrl] = useState('');
+  const [directFileBase64, setDirectFileBase64] = useState('');
+  const [directFileName, setDirectFileName] = useState('');
+  const [directSubType, setDirectSubType] = useState<'url' | 'file'>('url');
+  const [isDirectUploading, setIsDirectUploading] = useState(false);
   
   // States for Backup/Restore system
   const [isExporting, setIsExporting] = useState(false);
@@ -145,24 +153,28 @@ export default function AdminPanel({
     }
   };
 
-  const fetchPendingPuzzles = async () => {
+  const fetchPuzzles = async () => {
     setIsLoadingPuzzles(true);
     try {
-      const res = await fetch(`/api/puzzle/pending?adminDiscordId=${adminDiscordId}&adminUsername=${adminUsername}`, {
-        headers: {
-          'x-admin-discord-id': adminDiscordId,
-          'x-admin-username': adminUsername
-        }
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPendingPuzzles(data);
-      } else {
-        const err = await res.text();
-        console.error('Failed to load pending puzzles:', err);
+      const headers = {
+        'x-admin-discord-id': adminDiscordId,
+        'x-admin-username': adminUsername
+      };
+      
+      const [pendingRes, allRes] = await Promise.all([
+        fetch(`/api/puzzle/pending?adminDiscordId=${adminDiscordId}&adminUsername=${adminUsername}`, { headers }),
+        fetch(`/api/puzzle/all?adminDiscordId=${adminDiscordId}&adminUsername=${adminUsername}`, { headers })
+      ]);
+
+      if (pendingRes.ok) {
+        setPendingPuzzles(await pendingRes.json());
+      }
+      if (allRes.ok) {
+        const allData = await allRes.json();
+        setAllPuzzles(allData);
       }
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching admin puzzles list:', err);
     } finally {
       setIsLoadingPuzzles(false);
     }
@@ -182,6 +194,7 @@ export default function AdminPanel({
       if (res.ok) {
         showNotice('Custom puzzle image approved successfully!');
         setPendingPuzzles(prev => prev.filter(p => p.id !== id));
+        fetchPuzzles();
       } else {
         const errData = await res.json();
         showNotice(errData.error || 'Failed to approve image', 'error');
@@ -206,6 +219,7 @@ export default function AdminPanel({
       if (res.ok) {
         showNotice('Custom puzzle image rejected and deleted.');
         setPendingPuzzles(prev => prev.filter(p => p.id !== id));
+        fetchPuzzles();
       } else {
         const errData = await res.json();
         showNotice(errData.error || 'Failed to reject image', 'error');
@@ -213,6 +227,101 @@ export default function AdminPanel({
     } catch (err) {
       console.error('[REJECT ERROR]', err);
       showNotice('Network error rejecting puzzle image', 'error');
+    }
+  };
+
+  const deletePuzzle = async (id: string) => {
+    try {
+      const res = await fetch('/api/puzzle/delete', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ id, adminDiscordId, adminUsername })
+      });
+      if (res.ok) {
+        showNotice('Puzzle image/level permanently deleted.');
+        setPendingPuzzles(prev => prev.filter(p => p.id !== id));
+        setAllPuzzles(prev => prev.filter(p => p.id !== id));
+        fetchPuzzles();
+      } else {
+        const errData = await res.json();
+        showNotice(errData.error || 'Failed to delete level', 'error');
+      }
+    } catch (err) {
+      console.error('[DELETE ERROR]', err);
+      showNotice('Network error deleting puzzle level', 'error');
+    }
+  };
+
+  const handleDirectFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2.5 * 1024 * 1024) {
+      showNotice('⚠️ Image size must be smaller than 2.5MB.', 'error');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setDirectFileBase64(base64);
+      setDirectFileName(file.name);
+    };
+    reader.onerror = (err) => {
+      console.error(err);
+      showNotice('Error reading image file.', 'error');
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const addDirectPuzzle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    let finalUrl = '';
+    
+    if (directSubType === 'url') {
+      if (!directUrl.trim()) return;
+      finalUrl = directUrl.trim();
+    } else {
+      if (!directFileBase64) {
+        showNotice('⚠️ Please select a file to upload first.', 'error');
+        return;
+      }
+      finalUrl = directFileBase64;
+    }
+
+    setIsDirectUploading(true);
+    try {
+      const res = await fetch('/api/puzzle/upload', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ url: finalUrl, name: `${adminUsername} (Admin)` })
+      });
+
+      if (res.ok) {
+        showNotice('✅ Direct approved puzzle level created successfully!', 'success');
+        setDirectUrl('');
+        setDirectFileBase64('');
+        setDirectFileName('');
+        const fileInput = document.getElementById('admin-puzzle-file-input') as HTMLInputElement;
+        if (fileInput) fileInput.value = '';
+        fetchPuzzles();
+      } else {
+        const data = await res.json();
+        showNotice(data.error || 'Failed to create level.', 'error');
+      }
+    } catch (err) {
+      console.error('Error creating level:', err);
+      showNotice('Network error creating puzzle level.', 'error');
+    } finally {
+      setIsDirectUploading(false);
     }
   };
 
@@ -554,6 +663,19 @@ export default function AdminPanel({
           >
             <Database className="w-4 h-4" /> Save & Load Progress
           </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('puzzles');
+              fetchPuzzles();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'puzzles'
+                ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <Image className="w-4 h-4 text-pink-400" /> Pending Puzzle Images ({pendingPuzzles.length})
+          </button>
         </div>
 
         {/* Sync Controls */}
@@ -562,6 +684,7 @@ export default function AdminPanel({
             fetchUsers();
             fetchCodes();
             fetchAuditReports();
+            fetchPuzzles();
             showNotice('State refreshed with database.', 'success');
           }}
           className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-400 hover:text-white transition-all flex items-center gap-1.5 text-xs font-mono"
@@ -1094,6 +1217,241 @@ export default function AdminPanel({
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {activeSubTab === 'puzzles' && (
+        /* PUZZLES MANAGER VIEW */
+        <div className="space-y-6 text-left">
+          
+          {/* Header */}
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-zinc-900 pb-3 gap-4">
+            <div>
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <Image className="w-5 h-5 text-pink-500" /> Custom Slide Puzzle Manager
+              </h3>
+              <p className="text-zinc-400 text-xs">
+                Create new puzzle levels directly via file upload or URL, approve custom submissions from players, and delete active levels whenever you want.
+              </p>
+            </div>
+            
+            {/* View Tab Switcher */}
+            <div className="flex bg-zinc-950 p-1.5 rounded-xl border border-zinc-800 self-start sm:self-center">
+              <button
+                onClick={() => setPuzzleViewTab('pending')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  puzzleViewTab === 'pending'
+                    ? 'bg-pink-600 text-white shadow'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Awaiting Verification ({pendingPuzzles.length})
+              </button>
+              <button
+                onClick={() => setPuzzleViewTab('approved')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  puzzleViewTab === 'approved'
+                    ? 'bg-pink-600 text-white shadow'
+                    : 'text-zinc-400 hover:text-white'
+                }`}
+              >
+                Playable Levels ({allPuzzles.filter(p => p.approved).length})
+              </button>
+            </div>
+          </div>
+
+          {/* CREATE DIRECT LEVEL / IMAGE FORM (ADMIN ONLY) */}
+          <div className="p-5 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 shadow-xl space-y-4">
+            <h4 className="font-bold text-sm text-white flex items-center gap-2">
+              <Plus className="w-4.5 h-4.5 text-pink-400" /> Create Direct Playable Level
+            </h4>
+            <p className="text-xs text-zinc-400">
+              Create and release a new level immediately. Since you are an administrator, levels created here bypass verification and are immediately playable by everyone.
+            </p>
+
+            <form onSubmit={addDirectPuzzle} className="space-y-3">
+              <div className="flex gap-2 border-b border-zinc-800 pb-2">
+                <button
+                  type="button"
+                  onClick={() => setDirectSubType('url')}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                    directSubType === 'url' ? 'bg-pink-600/20 text-pink-400 border border-pink-500/30' : 'bg-zinc-950 text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  By URL
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDirectSubType('file')}
+                  className={`px-2.5 py-1 rounded text-[10px] font-bold transition-all ${
+                    directSubType === 'file' ? 'bg-pink-600/20 text-pink-400 border border-pink-500/30' : 'bg-zinc-950 text-zinc-500 hover:text-zinc-300'
+                  }`}
+                >
+                  File Upload
+                </button>
+              </div>
+
+              {directSubType === 'url' ? (
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    required
+                    value={directUrl}
+                    onChange={(e) => setDirectUrl(e.target.value)}
+                    placeholder="https://example.com/beautiful-level.png"
+                    className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-white focus:outline-none focus:border-pink-500 transition-all"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isDirectUploading}
+                    className="px-5 py-2.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs transition-all flex items-center gap-1.5 active:scale-95 disabled:opacity-50 shrink-0"
+                  >
+                    {isDirectUploading ? 'Creating...' : 'Create Level'}
+                  </button>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="admin-puzzle-file-input"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleDirectFileChange}
+                      className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 file:mr-2 file:py-1 file:px-2.5 file:rounded-md file:border-0 file:text-[10px] file:font-semibold file:bg-pink-600 file:text-white hover:file:bg-pink-500 cursor-pointer"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isDirectUploading || !directFileBase64}
+                      className="px-5 py-2.5 rounded-xl bg-pink-600 hover:bg-pink-500 disabled:opacity-50 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-bold text-xs transition-all flex items-center gap-1.5 active:scale-95 shrink-0"
+                    >
+                      {isDirectUploading ? 'Uploading...' : 'Upload & Create'}
+                    </button>
+                  </div>
+                  {directFileName && (
+                    <p className="text-[10px] font-mono text-zinc-500">
+                      Selected file: <span className="text-zinc-300 font-bold">{directFileName}</span>
+                    </p>
+                  )}
+                </div>
+              )}
+            </form>
+          </div>
+
+          {/* LIST VIEWS */}
+          {isLoadingPuzzles ? (
+            <div className="flex flex-col items-center justify-center py-20 gap-3">
+              <span className="w-8 h-8 border-2 border-pink-500/20 border-t-pink-500 rounded-full animate-spin" />
+              <p className="text-xs text-zinc-500 font-mono">Syncing levels...</p>
+            </div>
+          ) : puzzleViewTab === 'pending' ? (
+            /* PENDING PUZZLES */
+            pendingPuzzles.length === 0 ? (
+              <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/20">
+                <Image className="w-10 h-10 text-zinc-700 mx-auto mb-3 animate-pulse" />
+                <p className="text-sm font-bold text-zinc-400">All Clean!</p>
+                <p className="text-xs text-zinc-500 mt-1">No custom puzzle images are currently waiting for admin approval.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                {pendingPuzzles.map((p) => (
+                  <div 
+                    key={p.id} 
+                    className="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-4 flex flex-col justify-between hover:border-zinc-700 transition-all shadow-lg text-left"
+                  >
+                    <div className="space-y-3">
+                      <div className="relative aspect-square rounded-xl overflow-hidden border border-zinc-900 bg-zinc-950 group">
+                        <img 
+                          src={p.url} 
+                          alt="Submitted PFP" 
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1594322436404-5a0526db4d13?w=300&q=80';
+                          }}
+                        />
+                      </div>
+                      
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Sender:</span>
+                          <span className="font-bold text-white truncate max-w-[150px]">{p.uploadedBy}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Date:</span>
+                          <span className="font-mono text-zinc-400">{new Date(p.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => approvePuzzle(p.id)}
+                        className="py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs transition-all flex items-center justify-center gap-1 active:scale-95 shadow-md shadow-emerald-950/20"
+                      >
+                        <CheckCircle className="w-3.5 h-3.5" /> Approve
+                      </button>
+                      <button
+                        onClick={() => rejectPuzzle(p.id)}
+                        className="py-2.5 rounded-xl bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white font-bold text-xs border border-rose-500/20 transition-all flex items-center justify-center gap-1 active:scale-95"
+                      >
+                        <X className="w-3.5 h-3.5" /> Reject
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : (
+            /* APPROVED/PLAYABLE LEVELS */
+            allPuzzles.filter(p => p.approved).length === 0 ? (
+              <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-800 bg-zinc-950/20">
+                <Image className="w-10 h-10 text-zinc-700 mx-auto mb-3 animate-pulse" />
+                <p className="text-sm font-bold text-zinc-400">Gallery Empty</p>
+                <p className="text-xs text-zinc-500 mt-1">There are no approved or active slide puzzle levels currently. Use the tool above to add some!</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                {allPuzzles.filter(p => p.approved).map((p) => (
+                  <div 
+                    key={p.id} 
+                    className="rounded-2xl border border-zinc-800/80 bg-zinc-950/40 p-4 space-y-4 flex flex-col justify-between hover:border-zinc-700 transition-all shadow-lg text-left"
+                  >
+                    <div className="space-y-3">
+                      <div className="relative aspect-square rounded-xl overflow-hidden border border-zinc-900 bg-zinc-950 group">
+                        <img 
+                          src={p.url} 
+                          alt="Playable Level" 
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1594322436404-5a0526db4d13?w=300&q=80';
+                          }}
+                        />
+                      </div>
+                      
+                      <div className="space-y-1 text-xs">
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Creator:</span>
+                          <span className="font-bold text-white truncate max-w-[150px]">{p.uploadedBy}</span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span className="text-zinc-500">Created:</span>
+                          <span className="font-mono text-zinc-400">{new Date(p.createdAt).toLocaleDateString()}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => deletePuzzle(p.id)}
+                      className="w-full py-2.5 rounded-xl bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white font-bold text-xs border border-rose-500/20 transition-all flex items-center justify-center gap-1.5 active:scale-95"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Delete Level
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )
+          )}
         </div>
       )}
     </div>

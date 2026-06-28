@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw, AlertCircle, Heart, Coins, Sparkles, ArrowLeft, RotateCw, Landmark } from 'lucide-react';
+import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw, AlertCircle, Heart, Coins, Sparkles, ArrowLeft, RotateCw, Landmark, Grid, LayoutGrid, Link2 } from 'lucide-react';
 import { Tooltip } from './Tooltip';
+import SlidePuzzle from './SlidePuzzle';
 
 interface GameLog {
   id: string;
@@ -53,7 +54,12 @@ export default function AuraGames({
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | null>(null);
+
+  // Rules visibility states
+  const [showMathRules, setShowMathRules] = useState<boolean>(false);
+  const [showKotdRules, setShowKotdRules] = useState<boolean>(false);
+  const [showCasinoRules, setShowCasinoRules] = useState<boolean>(false);
 
   // --- BETTING MINIGAMES STATE ---
   const [betAmount, setBetAmount] = useState<string>('50');
@@ -94,6 +100,50 @@ export default function AuraGames({
       setKotdUsername(savedName);
     }
   }, [activeGame]);
+
+  // Handle lobby invite links from query parameters
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const gameParam = urlParams.get('game');
+    if (gameParam && ['math', 'kotd', 'betting', 'puzzle'].includes(gameParam)) {
+      setActiveGame(gameParam as any);
+      
+      // Auto-join the lobby if it is math
+      if (gameParam === 'math') {
+        const joinLobby = async () => {
+          try {
+            await fetch('/api/game/join', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: playerId, name: playerName, game: 'math' })
+            });
+            setMathLobbyJoined(true);
+          } catch (err) {
+            console.error('Error auto-joining Maths lobby via link:', err);
+          }
+        };
+        joinLobby();
+      }
+      
+      // Clean up URL parameters so they don't clutter the address bar
+      const newUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, newUrl);
+      
+      showNotice?.(`Joined ${gameParam === 'math' ? 'Multithread Maths Arena' : gameParam === 'kotd' ? 'King of Diamonds' : gameParam === 'puzzle' ? 'Slide Puzzle' : 'Betting Casino'} lobby via invite link! 🎮`, 'success');
+    }
+  }, [playerId, playerName]);
+
+  const handleCopyInvite = (game: string) => {
+    const link = `${window.location.origin}${window.location.pathname}?game=${game}`;
+    navigator.clipboard.writeText(link)
+      .then(() => {
+        showNotice?.(`Copied ${game === 'math' ? 'Multithread Maths Arena' : game === 'kotd' ? 'King of Diamonds' : game === 'puzzle' ? 'Slide Puzzle' : 'Betting Casino'} invite link to clipboard! 🔗`, 'success');
+      })
+      .catch((err) => {
+        console.error('Failed to copy link:', err);
+        showNotice?.('Failed to copy invite link. Please try again.', 'error');
+      });
+  };
 
   // --- REAL-TIME SERVER POLLING ---
   useEffect(() => {
@@ -420,76 +470,167 @@ export default function AuraGames({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="grid grid-cols-1 md:grid-cols-3 gap-6"
+            className="space-y-10 text-left"
           >
-            {/* Maths Game Selector */}
-            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-purple-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
-              <div className="space-y-3">
-                <span className="text-xs font-mono font-bold text-purple-400 uppercase tracking-widest bg-purple-500/10 border border-purple-500/20 px-3 py-1 rounded-full inline-block">
-                  Speed Logic
+            {/* Category 1: Strategy & Logic Arenas */}
+            <div className="space-y-5">
+              <div className="flex items-center gap-2.5 border-b border-zinc-800 pb-2">
+                <span className="p-1.5 rounded-lg bg-purple-500/10 text-purple-400">
+                  <LayoutGrid className="w-4.5 h-4.5" />
                 </span>
-                <h3 className="text-xl font-bold text-white">Multithread Maths Arena</h3>
-                <p className="text-xs text-zinc-400 leading-relaxed">
-                  Test your reaction speed against active moderators inside a timed math lobby. Solve equations to score aura points before anyone else does!
-                </p>
+                <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🧠 Strategy & Logic Games</h3>
               </div>
-              <Tooltip content="Compete in fast-paced arithmetic to gain points" position="top">
-                <button
-                  onClick={() => {
-                    setActiveGame('math');
-                    startMathGame();
-                  }}
-                  className="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <Play className="w-4.5 h-4.5" /> Start Maths Lobby
-                </button>
-              </Tooltip>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Maths Game Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-purple-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-purple-400 uppercase tracking-widest bg-purple-500/10 border border-purple-500/20 px-3 py-1 rounded-full inline-block">
+                      Speed Logic
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Multithread Maths Arena</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Test your reaction speed against active moderators inside a timed math lobby. Solve equations to score aura points before anyone else does!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Compete in fast-paced arithmetic to gain points" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('math');
+                            startMathGame();
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Play className="w-4.5 h-4.5" /> Start Lobby
+                        </button>
+                      </Tooltip>
+                    </div>
+                    <button
+                      onClick={() => handleCopyInvite('math')}
+                      title="Copy Invite Link"
+                      className="px-3 py-3.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-purple-500/40 hover:bg-zinc-900 text-zinc-400 hover:text-purple-400 transition-all active:scale-95 shrink-0"
+                    >
+                      <Link2 className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* King of Diamonds Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-pink-400 uppercase tracking-widest bg-pink-500/10 border border-pink-500/20 px-3 py-1 rounded-full inline-block">
+                      Strategy Card Game
+                    </span>
+                    <h3 className="text-xl font-bold text-white">King of Diamonds (KOTD)</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      The ultimate logical standoff. Submit numbers from 0 to 100. Target is 0.8 * average. Furthest player loses a life. Last standing wins the crown!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Play a thrilling multiplayer math guessing strategy game" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('kotd');
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Play className="w-4.5 h-4.5" /> Play Game
+                        </button>
+                      </Tooltip>
+                    </div>
+                    <button
+                      onClick={() => handleCopyInvite('kotd')}
+                      title="Copy Invite Link"
+                      className="px-3 py-3.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-pink-500/40 hover:bg-zinc-900 text-zinc-400 hover:text-pink-400 transition-all active:scale-95 shrink-0"
+                    >
+                      <Link2 className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Slide Puzzle Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-emerald-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-emerald-400 uppercase tracking-widest bg-emerald-500/10 border border-emerald-500/20 px-3 py-1 rounded-full inline-block">
+                      Visual Mastery
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Slide Puzzle Arena</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Rearrange image tiles by swapping clicked pieces to reconstruct stunning pictures. Solve 3x3, 4x4, or 5x5 grids for up to 30 Aura Points!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Solve sliding image puzzles to earn points" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('puzzle');
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Play className="w-4.5 h-4.5" /> Play Puzzle
+                        </button>
+                      </Tooltip>
+                    </div>
+                    <button
+                      onClick={() => handleCopyInvite('puzzle')}
+                      title="Copy Invite Link"
+                      className="px-3 py-3.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-emerald-500/40 hover:bg-zinc-900 text-zinc-400 hover:text-emerald-400 transition-all active:scale-95 shrink-0"
+                    >
+                      <Link2 className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
 
-            {/* King of Diamonds Selector */}
-            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
-              <div className="space-y-3">
-                <span className="text-xs font-mono font-bold text-pink-400 uppercase tracking-widest bg-pink-500/10 border border-pink-500/20 px-3 py-1 rounded-full inline-block">
-                  Strategy Card Game
+            {/* Category 2: High Stakes Betting Games */}
+            <div className="space-y-5">
+              <div className="flex items-center gap-2.5 border-b border-zinc-800 pb-2">
+                <span className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
+                  <Coins className="w-4.5 h-4.5" />
                 </span>
-                <h3 className="text-xl font-bold text-white">King of Diamonds (KOTD)</h3>
-                <p className="text-xs text-zinc-400 leading-relaxed">
-                  The ultimate logical standoff. Submit numbers from 0 to 100. Target is 0.8 * average. Furthest player loses a life. Last standing wins the crown!
-                </p>
+                <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🪙 High-Stakes Betting Games</h3>
               </div>
-              <Tooltip content="Play a thrilling multiplayer math guessing strategy game" position="top">
-                <button
-                  onClick={() => {
-                    setActiveGame('kotd');
-                  }}
-                  className="w-full py-3.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
-                >
-                  <Play className="w-4.5 h-4.5" /> Play King of Diamonds
-                </button>
-              </Tooltip>
-            </div>
-
-            {/* Betting Casino Selector */}
-            <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-amber-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
-              <div className="space-y-3">
-                <span className="text-xs font-mono font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full inline-block">
-                  High Stakes Luck
-                </span>
-                <h3 className="text-xl font-bold text-white">Aura Betting Casino</h3>
-                <p className="text-xs text-zinc-400 leading-relaxed">
-                  Put your hard-earned Aura Points on the line! Win double-or-nothing rewards on the classic 50/50 Coinflip or spin the 3-reel Slot Machine for massive payouts of up to 25x!
-                </p>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                {/* Betting Casino Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-amber-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full inline-block">
+                      High Stakes Luck
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Aura Betting Casino</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Put your hard-earned Aura Points on the line! Win double-or-nothing rewards on the classic 50/50 Coinflip or spin the 3-reel Slot Machine for massive payouts of up to 25x!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Wager your points in slots or coinflip mini-games" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('betting');
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-amber-950/25"
+                        >
+                          <Coins className="w-4 h-4" /> Enter Casino
+                        </button>
+                      </Tooltip>
+                    </div>
+                    <button
+                      onClick={() => handleCopyInvite('betting')}
+                      title="Copy Invite Link"
+                      className="px-3 py-3.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-amber-500/40 hover:bg-zinc-900 text-zinc-400 hover:text-amber-400 transition-all active:scale-95 shrink-0"
+                    >
+                      <Link2 className="w-4.5 h-4.5" />
+                    </button>
+                  </div>
+                </div>
               </div>
-              <Tooltip content="Wager your points in slots or coinflip mini-games" position="top">
-                <button
-                  onClick={() => {
-                    setActiveGame('betting');
-                  }}
-                  className="w-full py-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-amber-950/25"
-                >
-                  <Coins className="w-4 h-4" /> Enter Betting Casino
-                </button>
-              </Tooltip>
             </div>
           </motion.div>
         ) : activeGame === 'math' ? (
@@ -503,11 +644,34 @@ export default function AuraGames({
           >
             {/* Game Dashboard */}
             <div className="lg:col-span-8 space-y-6">
-              <div className="p-8 rounded-2xl bg-zinc-950 border border-zinc-800 text-center space-y-6 shadow-2xl">
+              <div className="p-8 rounded-2xl bg-zinc-950 border border-zinc-800 text-center space-y-6 shadow-2xl relative">
                 <div className="flex justify-between items-center text-xs font-mono text-zinc-500">
-                  <span>Speed Match Lobby</span>
+                  <div className="flex items-center gap-2">
+                    <span>Speed Match Lobby</span>
+                    <button
+                      onClick={() => setShowMathRules(!showMathRules)}
+                      className="p-1 rounded hover:bg-zinc-800 text-purple-400 hover:text-white transition-colors"
+                      title="View Rules"
+                    >
+                      <HelpCircle className="w-4 h-4" />
+                    </button>
+                  </div>
                   <span className="text-rose-400 font-bold">Round Timer: {mathTimeLeft}s</span>
                 </div>
+
+                {showMathRules && (
+                  <div className="p-4 rounded-xl bg-purple-950/20 border border-purple-500/20 text-xs text-zinc-300 text-left space-y-1.5 leading-relaxed">
+                    <h5 className="font-bold text-purple-300 flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5" /> Multithread Maths Arena Rules:
+                    </h5>
+                    <ul className="list-disc pl-4 space-y-1 text-zinc-400">
+                      <li>Server generates randomized mathematical equations.</li>
+                      <li>Type the answer and hit Submit as quickly as possible.</li>
+                      <li>The first player to submit the correct answer gets <span className="text-amber-400 font-bold">+1 Aura Point (AP)</span> added directly to their profile balance!</li>
+                      <li>Timer ticks down every 15 seconds. Active lobby needs at least 2 active players to run.</li>
+                    </ul>
+                  </div>
+                )}
 
                 <div className="space-y-2">
                   <span className="text-xs text-zinc-500 uppercase tracking-widest font-mono">Solve Equation</span>
@@ -531,12 +695,21 @@ export default function AuraGames({
                   </button>
                 </div>
 
-                <button
-                  onClick={stopMathGame}
-                  className="text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors"
-                >
-                  Quit Match
-                </button>
+                <div className="flex justify-center items-center gap-6 pt-2">
+                  <button
+                    onClick={() => handleCopyInvite('math')}
+                    className="text-xs font-bold text-purple-400 hover:text-purple-300 transition-colors flex items-center gap-1.5"
+                  >
+                    <Link2 className="w-3.5 h-3.5" /> Copy Invite Link
+                  </button>
+                  <span className="text-zinc-800">|</span>
+                  <button
+                    onClick={stopMathGame}
+                    className="text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors"
+                  >
+                    Quit Match
+                  </button>
+                </div>
               </div>
 
               {/* Game Log */}
@@ -597,7 +770,17 @@ export default function AuraGames({
           >
             {!kotdLobbyJoined ? (
               /* KOTD Joining screen */
-              <div className="p-8 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 shadow-xl space-y-6 max-w-md mx-auto text-center">
+              <div className="p-8 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 shadow-xl space-y-6 max-w-md mx-auto text-center relative">
+                <div className="flex justify-between items-center absolute top-4 right-4">
+                  <button
+                    onClick={() => setShowKotdRules(!showKotdRules)}
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white text-xs font-bold transition-all"
+                  >
+                    <HelpCircle className="w-4 h-4 text-pink-400" />
+                    {showKotdRules ? 'Hide Rules' : 'Rules'}
+                  </button>
+                </div>
+
                 <div className="w-12 h-12 rounded-xl bg-pink-500/10 flex items-center justify-center text-pink-400 mx-auto border border-pink-500/20">
                   <Gamepad2 className="w-6 h-6 animate-bounce" />
                 </div>
@@ -606,6 +789,21 @@ export default function AuraGames({
                   <h3 className="text-xl font-bold text-white">Join King of Diamonds</h3>
                   <p className="text-xs text-zinc-400">Enter your name to register for the upcoming round strategy session</p>
                 </div>
+
+                {showKotdRules && (
+                  <div className="p-4 rounded-xl bg-pink-950/20 border border-pink-500/20 text-xs text-zinc-300 text-left space-y-1.5 leading-relaxed">
+                    <h5 className="font-bold text-pink-300 flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5" /> King of Diamonds Rules:
+                    </h5>
+                    <ul className="list-disc pl-4 space-y-1 text-zinc-400">
+                      <li>Every round, all active players submit a secret strategy number between <span className="font-bold text-white">0 and 100</span>.</li>
+                      <li>The server calculates the average of all submissions and multiplies it by <span className="text-pink-400 font-bold">0.8</span> to establish the target.</li>
+                      <li>The player closest to the target wins <span className="text-emerald-400 font-bold">+2 Aura Points (AP)</span>.</li>
+                      <li>The player furthest from the target loses <span className="text-rose-400 font-bold">1 Heart</span>.</li>
+                      <li>Players who run out of Hearts are eliminated. The last standing champion wins <span className="text-amber-400 font-bold">+10 Aura Points (AP)</span>!</li>
+                    </ul>
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   <input
@@ -622,6 +820,14 @@ export default function AuraGames({
                   >
                     Enter Arena Lobby
                   </button>
+                  <div className="flex justify-center pt-2">
+                    <button
+                      onClick={() => handleCopyInvite('kotd')}
+                      className="text-xs font-bold text-pink-400 hover:text-pink-300 transition-colors flex items-center gap-1.5"
+                    >
+                      <Link2 className="w-3.5 h-3.5" /> Copy Invite Link
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : (
@@ -631,9 +837,33 @@ export default function AuraGames({
                 <div className="lg:col-span-8 space-y-6">
                   <div className="p-8 rounded-2xl bg-zinc-950 border border-zinc-800 text-center space-y-6 shadow-2xl relative overflow-hidden">
                     <div className="flex justify-between items-center text-xs font-mono text-zinc-500">
-                      <span>KOTD Match • Round {kotdRound}</span>
+                      <div className="flex items-center gap-2">
+                        <span>KOTD Match • Round {kotdRound}</span>
+                        <button
+                          onClick={() => setShowKotdRules(!showKotdRules)}
+                          className="p-1 rounded hover:bg-zinc-800 text-pink-400 hover:text-white transition-colors"
+                          title="View Rules"
+                        >
+                          <HelpCircle className="w-4 h-4" />
+                        </button>
+                      </div>
                       <span className="text-rose-400 font-bold">Action Clock: {kotdTimeLeft}s</span>
                     </div>
+
+                    {showKotdRules && (
+                      <div className="p-4 rounded-xl bg-pink-950/20 border border-pink-500/20 text-xs text-zinc-300 text-left space-y-1.5 leading-relaxed">
+                        <h5 className="font-bold text-pink-300 flex items-center gap-1">
+                          <Sparkles className="w-3.5 h-3.5" /> King of Diamonds Rules:
+                        </h5>
+                        <ul className="list-disc pl-4 space-y-1 text-zinc-400">
+                          <li>Every round, all active players submit a secret strategy number between <span className="font-bold text-white">0 and 100</span>.</li>
+                          <li>The server calculates the average of all submissions and multiplies it by <span className="text-pink-400 font-bold">0.8</span> to establish the target.</li>
+                          <li>The player closest to the target wins <span className="text-emerald-400 font-bold">+2 Aura Points (AP)</span>.</li>
+                          <li>The player furthest from the target loses <span className="text-rose-400 font-bold">1 Heart</span>.</li>
+                          <li>Players who run out of Hearts are eliminated. The last standing champion wins <span className="text-amber-400 font-bold">+10 Aura Points (AP)</span>!</li>
+                        </ul>
+                      </div>
+                    )}
 
                     <div className="space-y-2">
                       <span className="text-xs text-zinc-500 uppercase tracking-widest font-mono">Logical Strategy</span>
@@ -668,12 +898,21 @@ export default function AuraGames({
                       </div>
                     )}
 
-                    <button
-                      onClick={stopKotdGame}
-                      className="text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors block mx-auto"
-                    >
-                      Surrender Match
-                    </button>
+                    <div className="flex justify-center items-center gap-6 pt-2">
+                      <button
+                        onClick={() => handleCopyInvite('kotd')}
+                        className="text-xs font-bold text-pink-400 hover:text-pink-300 transition-colors flex items-center gap-1.5"
+                      >
+                        <Link2 className="w-3.5 h-3.5" /> Copy Invite Link
+                      </button>
+                      <span className="text-zinc-800">|</span>
+                      <button
+                        onClick={stopKotdGame}
+                        className="text-xs font-bold text-zinc-500 hover:text-zinc-300 transition-colors"
+                      >
+                        Surrender Match
+                      </button>
+                    </div>
                   </div>
 
                   {/* KOTD Game Log */}
@@ -739,6 +978,23 @@ export default function AuraGames({
               </div>
             )}
           </motion.div>
+        ) : activeGame === 'puzzle' ? (
+          /* SLIDE PUZZLE GAME DISPLAY */
+          <motion.div
+            key="puzzle-game"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+          >
+            <SlidePuzzle
+              playerName={playerName}
+              isLoggedIn={isLoggedIn}
+              points={points}
+              setPoints={setPoints}
+              showNotice={showNotice}
+              onBack={() => setActiveGame(null)}
+            />
+          </motion.div>
         ) : (
           /* AURA BETTING CASINO DISPLAY */
           <motion.div
@@ -749,19 +1005,38 @@ export default function AuraGames({
             className="space-y-6"
           >
             {/* Header / Back button */}
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-900/30 p-5 rounded-2xl border border-zinc-800/60 shadow-lg">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={() => setActiveGame(null)}
-                  className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 transition-all text-zinc-400 hover:text-white"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                </button>
-                <div>
-                  <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                    <Sparkles className="w-5 h-5 text-amber-400" /> Aura Palace Casino
-                  </h3>
-                  <p className="text-xs text-zinc-400">Play provably fair games of chance with your Aura Points</p>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-900/30 p-5 rounded-2xl border border-zinc-800/60 shadow-lg text-left">
+              <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setActiveGame(null)}
+                    className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 transition-all text-zinc-400 hover:text-white"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <div>
+                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-amber-400" /> Aura Palace Casino
+                    </h3>
+                    <p className="text-xs text-zinc-400">Play provably fair games of chance with your Aura Points</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handleCopyInvite('betting')}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-950/40 border border-amber-500/20 text-amber-300 hover:text-white text-xs font-bold transition-all"
+                  >
+                    <Link2 className="w-4 h-4" />
+                    Invite Link
+                  </button>
+                  <button
+                    onClick={() => setShowCasinoRules(!showCasinoRules)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white text-xs font-bold transition-all"
+                  >
+                    <HelpCircle className="w-4 h-4 text-amber-400" />
+                    {showCasinoRules ? 'Hide Rules' : 'Rules & Odds'}
+                  </button>
                 </div>
               </div>
 
@@ -773,6 +1048,30 @@ export default function AuraGames({
                 </div>
               </div>
             </div>
+
+            {/* Casino Rules Panel */}
+            {showCasinoRules && (
+              <div className="p-5 rounded-xl bg-amber-950/20 border border-amber-500/20 text-xs text-zinc-300 text-left space-y-2 shadow-xl">
+                <h4 className="font-bold text-sm text-amber-400 flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4" /> Betting Casino Rules & Payout Odds
+                </h4>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <span className="font-bold text-zinc-200">🪙 Coinflip Rules:</span>
+                    <p className="text-zinc-400">Choose Heads or Tails and enter any bet. Correct prediction pays double your bet (<span className="text-emerald-400 font-bold">2x Payout</span>). Incorrect prediction loses wager. Provably fair 50/50 ratio.</p>
+                  </div>
+                  <div className="space-y-1">
+                    <span className="font-bold text-zinc-200">🎰 Slot Machine Payout Matrix:</span>
+                    <ul className="list-disc pl-4 text-zinc-400 space-y-0.5">
+                      <li>Three Kings (👑 👑 👑) — <span className="text-amber-400 font-bold">25x Payout</span></li>
+                      <li>Three Diamonds (💎 💎 💎) — <span className="text-amber-400 font-bold">15x Payout</span></li>
+                      <li>Three Identical Fruits — <span className="text-amber-400 font-bold">10x Payout</span></li>
+                      <li>Any 2 Matching Symbols — <span className="text-amber-300 font-bold">3x Payout</span></li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Main Content Layout */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

@@ -7,7 +7,9 @@ import {
   ActionRowBuilder, 
   ComponentType,
   Message,
-  PermissionFlagsBits
+  PermissionFlagsBits,
+  REST,
+  Routes
 } from 'discord.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -53,6 +55,26 @@ interface Farmer {
   timeOnWebsite?: number;
   invites?: number;
   invitedBy?: string;
+  gamesPlayed?: Record<string, number>;
+  totalGamesPlayed?: number;
+  discordMessagesCount?: number;
+}
+
+interface Giveaway {
+  id: string;
+  prizeType: 'role' | 'ap' | 'minecraft' | 'other';
+  prizeName: string;
+  rewardValue?: number;
+  requirements: {
+    discordMessages?: number;
+    gamesPlayed?: number;
+  };
+  participants: string[];
+  winner?: string;
+  startedBy: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'active' | 'ended';
 }
 
 // Global active blackjack sessions and general command cooldowns
@@ -224,7 +246,8 @@ export function startDiscordBot(
     uploadedBy: string;
     approved: boolean;
     createdAt: number;
-  }>
+  }>,
+  giveaways?: Giveaway[]
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
@@ -317,8 +340,113 @@ export function startDiscordBot(
     return farmer;
   };
 
+  const recordBotGamePlayed = (currentFarmer: Farmer, gameKey: string) => {
+    if (!currentFarmer.gamesPlayed) {
+      currentFarmer.gamesPlayed = {};
+    }
+    currentFarmer.gamesPlayed[gameKey] = (currentFarmer.gamesPlayed[gameKey] || 0) + 1;
+    currentFarmer.totalGamesPlayed = (currentFarmer.totalGamesPlayed || 0) + 1;
+    saveData();
+  };
+
   client.once('ready', async () => {
     console.log(`[DISCORD BOT] Logged in successfully as ${client.user?.tag}! Listening to economy commands starting with '+' prefix.`);
+
+    // Register Giveaway Slash Commands
+    const commands = [
+      {
+        name: 'giveaway',
+        description: 'Manage and participate in giveaways',
+        options: [
+          {
+            name: 'list',
+            description: 'List all active and completed giveaways',
+            type: 1
+          },
+          {
+            name: 'enter',
+            description: 'Enter an active giveaway',
+            type: 1,
+            options: [
+              {
+                name: 'id',
+                description: 'The ID of the giveaway to enter',
+                type: 3,
+                required: true
+              }
+            ]
+          },
+          {
+            name: 'create',
+            description: 'Create a new giveaway (Admin only)',
+            type: 1,
+            options: [
+              {
+                name: 'type',
+                description: 'The type of prize',
+                type: 3,
+                required: true,
+                choices: [
+                  { name: 'Aura Points (ap)', value: 'ap' },
+                  { name: 'Custom Discord Role (role)', value: 'role' },
+                  { name: 'Minecraft reward (minecraft)', value: 'minecraft' },
+                  { name: 'Other (other)', value: 'other' }
+                ]
+              },
+              {
+                name: 'prize',
+                description: 'The name of the prize',
+                type: 3,
+                required: true
+              },
+              {
+                name: 'messages',
+                description: 'Minimum Discord messages required',
+                type: 4,
+                required: false
+              },
+              {
+                name: 'games',
+                description: 'Minimum arcade games played required',
+                type: 4,
+                required: false
+              },
+              {
+                name: 'reward_value',
+                description: 'Aura points reward value (for ap type giveaways)',
+                type: 4,
+                required: false
+              }
+            ]
+          },
+          {
+            name: 'end',
+            description: 'End a giveaway and roll the winner (Admin only)',
+            type: 1,
+            options: [
+              {
+                name: 'id',
+                description: 'The ID of the giveaway to end',
+                type: 3,
+                required: true
+              }
+            ]
+          }
+        ]
+      }
+    ];
+
+    try {
+      const rest = new REST({ version: '10' }).setToken(token);
+      console.log('[DISCORD BOT] Registering global slash commands...');
+      await rest.put(
+        Routes.applicationCommands(client.user!.id),
+        { body: commands }
+      );
+      console.log('[DISCORD BOT] Successfully registered global slash commands.');
+    } catch (err) {
+      console.error('[DISCORD BOT] Error registering slash commands:', err);
+    }
 
     // Cache invites for target server 1392526036520009779
     await cacheGuildInvites('1392526036520009779');
@@ -469,19 +597,221 @@ export function startDiscordBot(
         farmer.lastActive = Date.now();
         saveData();
         
-        console.log(`[INVITES] ${inviter.username} invited ${member.user.username}. Gained 150 AP.`);
-        
-        if (logActivity) {
-          logActivity(
-            '📥 New Discord Invite',
-            `**${inviter.username}** has invited **${member.user.username}** to the Discord Server!\n` +
-            `Awarded **+150 AP** (Total Invites: **${farmer.invites}** 👥).`,
-            3066993
-          );
-        }
       }
     } catch (err) {
       console.error('[INVITES] Error tracking member invite on join:', err);
+    }
+  });
+
+  client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isChatInputCommand()) return;
+
+    const { commandName, options, user, member, guild } = interaction;
+
+    if (commandName === 'giveaway') {
+      const subCommand = options.getSubcommand();
+      const authorId = user.id;
+      const authorTag = user.username;
+
+      // Get or create farmer profile for this user
+      const farmer = getOrCreateFarmerByDiscord(authorId, authorTag);
+
+      const sendEmbedInt = async (title: string, description: string, color = 10181046) => {
+        const embed = new EmbedBuilder()
+          .setTitle(title)
+          .setDescription(description)
+          .setColor(color)
+          .setTimestamp()
+          .setFooter({ text: 'Aurlets Economy System', iconURL: client.user?.displayAvatarURL() });
+        await interaction.reply({ embeds: [embed] });
+      };
+
+      const sendErrorInt = async (description: string) => {
+        await sendEmbedInt('❌ Error', description, 15158332);
+      };
+
+      // 1. LIST subCommand
+      if (subCommand === 'list') {
+        const listGiveaways = giveaways || [];
+        if (listGiveaways.length === 0) {
+          return sendEmbedInt('🎉 Giveaways List', 'No giveaways have been created yet!');
+        }
+
+        let desc = '';
+        listGiveaways.forEach(g => {
+          const reqs = [];
+          if (g.requirements?.discordMessages) reqs.push(`💬 ${g.requirements.discordMessages} Msgs`);
+          if (g.requirements?.gamesPlayed) reqs.push(`🎮 ${g.requirements.gamesPlayed} Games`);
+          const reqStr = reqs.length > 0 ? reqs.join(', ') : 'No requirements';
+
+          const participantsCount = g.participants ? g.participants.length : 0;
+          
+          if (g.status === 'active') {
+            desc += `🔹 **[ACTIVE] ID:** \`${g.id}\`\n` +
+                    `🎁 **Prize:** ${g.prizeName} (${g.prizeType.toUpperCase()})\n` +
+                    `📜 **Reqs:** ${reqStr}\n` +
+                    `👥 **Participants:** ${participantsCount}\n\n`;
+          } else {
+            desc += `🔸 **[ENDED] ID:** \`${g.id}\`\n` +
+                    `🎁 **Prize:** ${g.prizeName}\n` +
+                    `🏆 **Winner:** **${g.winner || 'No participants'}**\n\n`;
+          }
+        });
+
+        return sendEmbedInt('🎉 Active & Ended Giveaways', desc);
+      }
+
+      // 2. ENTER subCommand
+      if (subCommand === 'enter') {
+        const gId = options.getString('id', true).trim();
+
+        const listGiveaways = giveaways || [];
+        const g = listGiveaways.find(x => x.id === gId);
+        if (!g) {
+          return sendErrorInt(`Giveaway with ID \`${gId}\` not found! Use \`/giveaway list\` to see valid IDs.`);
+        }
+
+        if (g.status !== 'active') {
+          return sendErrorInt('This giveaway has already ended!');
+        }
+
+        if (g.participants.includes(farmer.name)) {
+          return sendErrorInt('You have already entered this giveaway!');
+        }
+
+        // Verify requirements
+        const userMsgs = farmer.discordMessagesCount || 0;
+        const userGames = farmer.totalGamesPlayed || 0;
+
+        if (g.requirements?.discordMessages && userMsgs < g.requirements.discordMessages) {
+          return sendErrorInt(`❌ You do not meet the Discord messages requirement!\nRequired: **${g.requirements.discordMessages}** | You have: **${userMsgs}**`);
+        }
+
+        if (g.requirements?.gamesPlayed && userGames < g.requirements.gamesPlayed) {
+          return sendErrorInt(`❌ You do not meet the games played requirement!\nRequired: **${g.requirements.gamesPlayed}** | You have: **${userGames}**`);
+        }
+
+        // Add to participants
+        g.participants.push(farmer.name);
+        saveData();
+
+        return sendEmbedInt(
+          '✅ Joined Giveaway!',
+          `You have successfully entered the giveaway for **${g.prizeName}**!\n` +
+          `Total participants: **${g.participants.length}** 👥`
+        );
+      }
+
+      // 3. CREATE subCommand (Admin Only)
+      if (subCommand === 'create') {
+        const isAdmin = member && (member as any).permissions.has(PermissionFlagsBits.Administrator) || authorId === '840560998011502593';
+        if (!isAdmin) {
+          return sendErrorInt('❌ Only server administrators can create giveaways.');
+        }
+
+        const prizeType = options.getString('type', true).toLowerCase();
+        const prizeName = options.getString('prize', true);
+        const reqMessages = options.getInteger('messages') || 0;
+        const reqGames = options.getInteger('games') || 0;
+        const rewardValue = options.getInteger('reward_value') || undefined;
+
+        const newId = 'gw_' + Math.random().toString(36).substring(2, 9);
+        const newGw: Giveaway = {
+          id: newId,
+          prizeType: prizeType as any,
+          prizeName,
+          rewardValue,
+          requirements: {
+            discordMessages: reqMessages > 0 ? reqMessages : undefined,
+            gamesPlayed: reqGames > 0 ? reqGames : undefined
+          },
+          participants: [],
+          startedBy: authorTag,
+          startedAt: Date.now(),
+          status: 'active'
+        };
+
+        if (giveaways) {
+          giveaways.push(newGw);
+          saveData();
+        }
+
+        if (logActivity) {
+          logActivity(
+            '🎉 New Giveaway Started (Discord Slash)',
+            `**${authorTag}** started a giveaway for **${prizeName}** (ID: \`${newId}\`)\n` +
+            `Requirements - Messages: **${reqMessages}** | Games Played: **${reqGames}**`,
+            10181046
+          );
+        }
+
+        return sendEmbedInt(
+          '🎉 Giveaway Created!',
+          `🎁 **Prize:** ${prizeName} (${prizeType.toUpperCase()})\n` +
+          `🆔 **Giveaway ID:** \`${newId}\`\n` +
+          `📜 **Requirements:** Messages: **${reqMessages}** | Games Played: **${reqGames}**\n\n` +
+          `Users can enter by typing: \`/giveaway enter id: ${newId}\` or joining via the Web Dashboard!`
+        );
+      }
+
+      // 4. END subCommand (Admin Only)
+      if (subCommand === 'end') {
+        const isAdmin = member && (member as any).permissions.has(PermissionFlagsBits.Administrator) || authorId === '840560998011502593';
+        if (!isAdmin) {
+          return sendErrorInt('❌ Only server administrators can end giveaways.');
+        }
+
+        const gId = options.getString('id', true).trim();
+
+        const listGiveaways = giveaways || [];
+        const g = listGiveaways.find(x => x.id === gId);
+        if (!g) {
+          return sendErrorInt(`Giveaway with ID \`${gId}\` not found!`);
+        }
+
+        if (g.status !== 'active') {
+          return sendErrorInt('This giveaway has already ended!');
+        }
+
+        g.status = 'ended';
+        g.endedAt = Date.now();
+
+        if (!g.participants || g.participants.length === 0) {
+          g.winner = undefined;
+          saveData();
+          return sendEmbedInt('🎉 Giveaway Ended!', `The giveaway for **${g.prizeName}** has ended, but there were no participants! 😔`);
+        }
+
+        const winnerIndex = Math.floor(Math.random() * g.participants.length);
+        const winnerName = g.participants[winnerIndex];
+        g.winner = winnerName;
+
+        // Distribute AP rewards automatically if prizeType is ap
+        if (g.prizeType === 'ap' && g.rewardValue) {
+          const winnerFarmer = farmers[winnerName];
+          if (winnerFarmer) {
+            winnerFarmer.points = (winnerFarmer.points || 0) + g.rewardValue;
+          }
+        }
+
+        saveData();
+
+        if (logActivity) {
+          logActivity(
+            '🎉 Giveaway Ended (Winner Drawn!)',
+            `Giveaway **${g.prizeName}** has concluded!\n🏆 **Winner:** **${winnerName}** (from ${g.participants.length} total participants!)`,
+            3066993
+          );
+        }
+
+        return sendEmbedInt(
+          '🎉 Giveaway Concluded!',
+          `🎁 **Prize:** ${g.prizeName}\n` +
+          `🏆 **Winner:** **${winnerName}**!\n` +
+          `👥 **Total Entries:** **${g.participants.length}**\n\n` +
+          `Congratulations to the winner! 🥳`
+        );
+      }
     }
   });
 
@@ -498,18 +828,22 @@ export function startDiscordBot(
       // Cooldown of 2 seconds
       if (now - lastTime >= 2000) {
         lastMessageTime.set(userId, now);
+        
+        const farmer = getOrCreateFarmerByDiscord(userId, message.author.username);
+        farmer.discordMessagesCount = (farmer.discordMessagesCount || 0) + 1;
+        farmer.lastActive = now;
+
         const count = (userMessageCounts.get(userId) || 0) + 1;
 
         // 1 point per 3 messages
         if (count >= 3) {
           userMessageCounts.set(userId, 0);
-          const farmer = getOrCreateFarmerByDiscord(userId, message.author.username);
           farmer.points = (farmer.points || 0) + 1;
-          farmer.lastActive = now;
           saveData();
-          console.log(`[ACTIVITY] Awarded 1 AP to ${message.author.username} for sending 3 messages.`);
+          console.log(`[ACTIVITY] Awarded 1 AP to ${message.author.username} for sending 3 messages. Total msgs: ${farmer.discordMessagesCount}`);
         } else {
           userMessageCounts.set(userId, count);
+          saveData();
         }
       }
     }
@@ -545,7 +879,8 @@ export function startDiscordBot(
       'set',
       'reset',
       'purge',
-      'puzzle'
+      'puzzle',
+      'giveaway', 'giveaways'
     ]);
 
     if (!VALID_COMMANDS.has(commandName)) return;
@@ -1159,7 +1494,7 @@ export function startDiscordBot(
           if (score > 21) {
             // Bust! Loss
             currentFarmer.points -= game.bet;
-            saveData();
+            recordBotGamePlayed(currentFarmer, 'blackjack');
             activeBlackjackGames.delete(authorId);
             collector.stop();
 
@@ -1214,7 +1549,7 @@ export function startDiscordBot(
 
           if (score > 21) {
             currentFarmer.points -= game.bet;
-            saveData();
+            recordBotGamePlayed(currentFarmer, 'blackjack');
             activeBlackjackGames.delete(authorId);
             collector.stop();
 
@@ -1314,7 +1649,7 @@ export function startDiscordBot(
       }
 
       currentFarmer.lastActive = Date.now();
-      saveData();
+      recordBotGamePlayed(currentFarmer, 'blackjack');
 
       const finalEmbed = new EmbedBuilder()
         .setTitle(outcomeTitle)
@@ -2082,43 +2417,78 @@ export function startDiscordBot(
     if (commandName === 'puzzle') {
       const subCommand = args[0]?.toLowerCase();
       if (subCommand !== 'deposit') {
-        return sendError('Usage: `+puzzle deposit` with an attached image (or reply to a message containing one).');
+        return sendError(
+          'Usage:\n' +
+          '• `+puzzle deposit <url>`\n' +
+          '• `+puzzle deposit <@user>`\n' +
+          '• `+puzzle deposit` with an attached image (or reply to a message containing one)'
+        );
       }
 
-      let attachment = message.attachments.first();
-      
-      // If no attachment on this message, look up the referenced/replied message
-      if (!attachment && message.reference && message.reference.messageId) {
-        try {
-          const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
-          attachment = repliedMsg.attachments.first();
-        } catch (err) {
-          console.error('[PUZZLE DEPOSIT] Error fetching replied message:', err);
+      let imageUrl = '';
+      let isPfp = false;
+      let targetUserTag = '';
+
+      // 1. Check for user mentions (e.g., @user)
+      const mentionedUser = message.mentions.users.first();
+      if (mentionedUser) {
+        imageUrl = mentionedUser.displayAvatarURL({ size: 1024 });
+        isPfp = true;
+        targetUserTag = mentionedUser.tag;
+      }
+
+      // 2. Check for URL in args (e.g., +puzzle deposit https://example.com/pic.jpg)
+      if (!imageUrl && args[1]) {
+        const urlArg = args[1].trim();
+        if (urlArg.startsWith('http://') || urlArg.startsWith('https://')) {
+          imageUrl = urlArg;
         }
       }
 
-      if (!attachment) {
-        return sendError('❌ No image attachment found! Please attach an image or reply to a message with an attached image using `+puzzle deposit`.');
+      // 3. Check for attachments (directly or via reply)
+      if (!imageUrl) {
+        let attachment = message.attachments.first();
+        if (!attachment && message.reference && message.reference.messageId) {
+          try {
+            const repliedMsg = await message.channel.messages.fetch(message.reference.messageId);
+            attachment = repliedMsg.attachments.first();
+          } catch (err) {
+            console.error('[PUZZLE DEPOSIT] Error fetching replied message:', err);
+          }
+        }
+        if (attachment) {
+          const isImage = attachment.contentType?.startsWith('image/') || 
+                          /\.(jpg|jpeg|png|webp|gif)$/i.test(attachment.url);
+          if (isImage) {
+            imageUrl = attachment.url;
+          } else {
+            return sendError('❌ The attached file is not a valid image. Supported formats: PNG, JPG, JPEG, WEBP, GIF.');
+          }
+        }
       }
 
-      const isImage = attachment.contentType?.startsWith('image/') || 
-                      /\.(jpg|jpeg|png|webp|gif)$/i.test(attachment.url);
-      if (!isImage) {
-        return sendError('❌ The attached file is not a valid image. Supported formats: PNG, JPG, JPEG, WEBP, GIF.');
+      if (!imageUrl) {
+        return sendError(
+          '❌ No valid image deposit source found!\n' +
+          'Please use one of the following methods:\n' +
+          '• **Attachment**: Attach an image and type `+puzzle deposit`\n' +
+          '• **Mention**: Type `+puzzle deposit @username` to use their profile picture (PFP)\n' +
+          '• **URL**: Type `+puzzle deposit <image-url>`'
+        );
       }
 
       // Add to puzzleImages array if it exists
       if (puzzleImages) {
         // Check for duplicates
-        const exists = puzzleImages.some(img => img.url === attachment!.url);
+        const exists = puzzleImages.some(img => img.url === imageUrl);
         if (exists) {
           return sendError('⚠️ This image has already been submitted for approval!');
         }
 
         const newImg = {
           id: 'img_' + Math.random().toString(36).substring(2, 11),
-          url: attachment.url,
-          uploadedBy: authorTag,
+          url: imageUrl,
+          uploadedBy: isPfp ? `${targetUserTag}'s PFP (via ${authorTag})` : authorTag,
           approved: false,
           createdAt: Date.now()
         };
@@ -2131,9 +2501,10 @@ export function startDiscordBot(
           .setTitle('🧩 Puzzle Image Deposited!')
           .setDescription(
             `✅ Custom puzzle image has been successfully deposited by **${authorTag}**!\n\n` +
+            (isPfp ? `Selected Target: **${targetUserTag}**'s Profile Picture (PFP)\n\n` : '') +
             `It has been submitted for **Admin Approval**. Once approved, it will be playable by everyone on the web dashboard.`
           )
-          .setThumbnail(attachment.url)
+          .setThumbnail(imageUrl)
           .setColor(3066993)
           .setTimestamp();
 
@@ -2143,7 +2514,7 @@ export function startDiscordBot(
         if (logActivity) {
           logActivity(
             '📥 Puzzle Image Deposited (Discord)',
-            `**${authorTag}** deposited a custom puzzle image via Discord for approval!`,
+            `**${authorTag}** deposited a custom puzzle image (PFP/URL/File) via Discord for approval!`,
             10181046
           );
         }
@@ -2152,6 +2523,222 @@ export function startDiscordBot(
       }
       return;
     }
+
+    if (commandName === 'giveaway' || commandName === 'giveaways') {
+      const subCommand = args[0]?.toLowerCase();
+
+      // Help menu for giveaway command if no args or invalid args
+      if (!subCommand || (subCommand !== 'list' && subCommand !== 'enter' && subCommand !== 'create' && subCommand !== 'end')) {
+        return sendEmbed(
+          '🎉 Giveaway System Commands',
+          '• `+giveaway list` - View all active and completed giveaways\n' +
+          '• `+giveaway enter <giveawayId>` - Enter an active giveaway\n' +
+          '• `+giveaway create <prizeType> <prizeName> [reqMessages] [reqGames] [rewardValue]` - (Admin) Create a giveaway\n' +
+          '• `+giveaway end <giveawayId>` - (Admin) End a giveaway and pick a winner'
+        );
+      }
+
+      // 1. LIST giveaways
+      if (subCommand === 'list') {
+        const listGiveaways = giveaways || [];
+        if (listGiveaways.length === 0) {
+          return sendEmbed('🎉 Giveaways List', 'No giveaways have been created yet!');
+        }
+
+        let desc = '';
+        listGiveaways.forEach(g => {
+          const reqs = [];
+          if (g.requirements?.discordMessages) reqs.push(`💬 ${g.requirements.discordMessages} Msgs`);
+          if (g.requirements?.gamesPlayed) reqs.push(`🎮 ${g.requirements.gamesPlayed} Games`);
+          const reqStr = reqs.length > 0 ? reqs.join(', ') : 'No requirements';
+
+          const participantsCount = g.participants ? g.participants.length : 0;
+          
+          if (g.status === 'active') {
+            desc += `🔹 **[ACTIVE] ID:** \`${g.id}\`\n` +
+                    `🎁 **Prize:** ${g.prizeName} (${g.prizeType.toUpperCase()})\n` +
+                    `📜 **Reqs:** ${reqStr}\n` +
+                    `👥 **Participants:** ${participantsCount}\n\n`;
+          } else {
+            desc += `🔸 **[ENDED] ID:** \`${g.id}\`\n` +
+                    `🎁 **Prize:** ${g.prizeName}\n` +
+                    `🏆 **Winner:** **${g.winner || 'No participants'}**\n\n`;
+          }
+        });
+
+        return sendEmbed('🎉 Active & Ended Giveaways', desc);
+      }
+
+      // 2. ENTER giveaway
+      if (subCommand === 'enter') {
+        const gId = args[1]?.trim();
+        if (!gId) {
+          return sendError('Usage: `+giveaway enter <giveawayId>`');
+        }
+
+        const listGiveaways = giveaways || [];
+        const g = listGiveaways.find(x => x.id === gId);
+        if (!g) {
+          return sendError(`Giveaway with ID \`${gId}\` not found! Use \`+giveaway list\` to see valid IDs.`);
+        }
+
+        if (g.status !== 'active') {
+          return sendError('This giveaway has already ended!');
+        }
+
+        // Check if user already entered
+        if (g.participants.includes(farmer.name)) {
+          return sendError('You have already entered this giveaway!');
+        }
+
+        // Verify requirements
+        const userMsgs = farmer.discordMessagesCount || 0;
+        const userGames = farmer.totalGamesPlayed || 0;
+
+        if (g.requirements?.discordMessages && userMsgs < g.requirements.discordMessages) {
+          return sendError(`❌ You do not meet the Discord messages requirement!\nRequired: **${g.requirements.discordMessages}** | You have: **${userMsgs}**`);
+        }
+
+        if (g.requirements?.gamesPlayed && userGames < g.requirements.gamesPlayed) {
+          return sendError(`❌ You do not meet the games played requirement!\nRequired: **${g.requirements.gamesPlayed}** | You have: **${userGames}**`);
+        }
+
+        // Add to participants
+        g.participants.push(farmer.name);
+        saveData();
+
+        return sendEmbed(
+          '✅ Joined Giveaway!',
+          `You have successfully entered the giveaway for **${g.prizeName}**!\n` +
+          `Total participants: **${g.participants.length}** 👥`
+        );
+      }
+
+      // 3. CREATE giveaway (Admin Only)
+      if (subCommand === 'create') {
+        // Check if author has Admin permission or matches specific ID
+        const isAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) || authorId === '840560998011502593';
+        if (!isAdmin) {
+          return sendError('❌ Only server administrators can create giveaways.');
+        }
+
+        const prizeType = args[1]?.toLowerCase(); // role, ap, minecraft, other
+        let prizeName = args[2];
+        const reqMessages = args[3] ? parseInt(args[3], 10) : 0;
+        const reqGames = args[4] ? parseInt(args[4], 10) : 0;
+        const rewardValue = args[5] ? parseInt(args[5], 10) : undefined;
+
+        if (!prizeType || !prizeName) {
+          return sendError('Usage: `+giveaway create <role|ap|minecraft|other> <prizeName> [reqMessages] [reqGames] [rewardValue]`\n*(Tip: use quotes for spaces in prizeName)*');
+        }
+
+        // Strip quotes if they were added to prizeName
+        if (prizeName.startsWith('"') && prizeName.endsWith('"')) {
+          prizeName = prizeName.slice(1, -1);
+        }
+
+        const newId = 'gw_' + Math.random().toString(36).substring(2, 9);
+        const newGw: Giveaway = {
+          id: newId,
+          prizeType: prizeType as any,
+          prizeName,
+          rewardValue,
+          requirements: {
+            discordMessages: reqMessages > 0 ? reqMessages : undefined,
+            gamesPlayed: reqGames > 0 ? reqGames : undefined
+          },
+          participants: [],
+          startedBy: authorTag,
+          startedAt: Date.now(),
+          status: 'active'
+        };
+
+        if (giveaways) {
+          giveaways.push(newGw);
+          saveData();
+        }
+
+        if (logActivity) {
+          logActivity(
+            '🎉 New Giveaway Started (Discord)',
+            `**${authorTag}** started a giveaway for **${prizeName}** (ID: \`${newId}\`)\n` +
+            `Requirements - Messages: **${reqMessages}** | Games Played: **${reqGames}**`,
+            10181046
+          );
+        }
+
+        return sendEmbed(
+          '🎉 Giveaway Created!',
+          `🎁 **Prize:** ${prizeName} (${prizeType.toUpperCase()})\n` +
+          `🆔 **Giveaway ID:** \`${newId}\`\n` +
+          `📜 **Requirements:** Messages: **${reqMessages}** | Games Played: **${reqGames}**\n\n` +
+          `Users can enter by typing: \`+giveaway enter ${newId}\` or joining via the Web Dashboard!`
+        );
+      }
+
+      // 4. END giveaway (Admin Only)
+      if (subCommand === 'end') {
+        const isAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) || authorId === '840560998011502593';
+        if (!isAdmin) {
+          return sendError('❌ Only server administrators can end giveaways.');
+        }
+
+        const gId = args[1]?.trim();
+        if (!gId) {
+          return sendError('Usage: `+giveaway end <giveawayId>`');
+        }
+
+        const listGiveaways = giveaways || [];
+        const g = listGiveaways.find(x => x.id === gId);
+        if (!g) {
+          return sendError(`Giveaway with ID \`${gId}\` not found!`);
+        }
+
+        if (g.status !== 'active') {
+          return sendError('This giveaway has already ended!');
+        }
+
+        g.status = 'ended';
+        g.endedAt = Date.now();
+
+        if (!g.participants || g.participants.length === 0) {
+          g.winner = undefined;
+          saveData();
+          return sendEmbed('🎉 Giveaway Ended!', `The giveaway for **${g.prizeName}** has ended, but there were no participants! 😔`);
+        }
+
+        const winnerIndex = Math.floor(Math.random() * g.participants.length);
+        const winnerName = g.participants[winnerIndex];
+        g.winner = winnerName;
+
+        // Distribute AP rewards automatically if prizeType is ap
+        if (g.prizeType === 'ap' && g.rewardValue) {
+          const winnerFarmer = farmers[winnerName];
+          if (winnerFarmer) {
+            winnerFarmer.points = (winnerFarmer.points || 0) + g.rewardValue;
+          }
+        }
+
+        saveData();
+
+        if (logActivity) {
+          logActivity(
+            '🎉 Giveaway Ended (Winner Drawn!)',
+            `Giveaway **${g.prizeName}** has concluded!\n🏆 **Winner:** **${winnerName}** (from ${g.participants.length} total participants!)`,
+            3066993
+          );
+        }
+
+        return sendEmbed(
+          '🎉 Giveaway Concluded!',
+          `🎁 **Prize:** ${g.prizeName}\n` +
+          `🏆 **Winner:** **${winnerName}**!\n` +
+          `👥 **Total Entries:** **${g.participants.length}**\n\n` +
+          `Congratulations to the winner! 🥳`
+        );
+      }
+    }
+    return;
   });
 
   // Login to Discord

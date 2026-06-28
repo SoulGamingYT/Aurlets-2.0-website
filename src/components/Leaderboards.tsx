@@ -11,6 +11,7 @@ interface LeaderboardPlayer {
   invites?: number;
   avatarUrl?: string;
   discordUsername?: string;
+  totalGamesPlayed?: number;
 }
 
 interface LeaderboardsData {
@@ -18,6 +19,7 @@ interface LeaderboardsData {
   streak: LeaderboardPlayer[];
   time: LeaderboardPlayer[];
   invites: LeaderboardPlayer[];
+  gamesPlayed: LeaderboardPlayer[];
 }
 
 interface LeaderboardsProps {
@@ -33,12 +35,13 @@ export default function Leaderboards({
   onOpenAuthModal,
   showNotice
 }: LeaderboardsProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'ap' | 'streak' | 'time' | 'invites'>('ap');
+  const [activeSubTab, setActiveSubTab] = useState<'ap' | 'streak' | 'time' | 'invites' | 'gamesPlayed'>('ap');
   const [leaderboards, setLeaderboards] = useState<LeaderboardsData>({
     ap: [],
     streak: [],
     time: [],
-    invites: []
+    invites: [],
+    gamesPlayed: []
   });
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [copied, setCopied] = useState<boolean>(false);
@@ -143,6 +146,7 @@ export default function Leaderboards({
       case 'streak': return leaderboards.streak;
       case 'time': return leaderboards.time;
       case 'invites': return leaderboards.invites;
+      case 'gamesPlayed': return leaderboards.gamesPlayed;
       default: return [];
     }
   };
@@ -153,6 +157,7 @@ export default function Leaderboards({
       case 'streak': return `🔥 ${player.streak ?? 0} Days`;
       case 'time': return formatTime(player.timeOnWebsite);
       case 'invites': return `${player.invites ?? 0} Invited`;
+      case 'gamesPlayed': return `🎮 ${player.totalGamesPlayed ?? 0} Games`;
       default: return '';
     }
   };
@@ -342,6 +347,16 @@ export default function Leaderboards({
               }`}
             >
               <UserPlus className="w-3.5 h-3.5" /> Top Inviters
+            </button>
+            <button
+              onClick={() => setActiveSubTab('gamesPlayed')}
+              className={`flex-1 min-w-[90px] px-3 py-2 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                activeSubTab === 'gamesPlayed'
+                  ? 'bg-purple-600 text-white shadow shadow-purple-500/15'
+                  : 'text-zinc-400 hover:text-white hover:bg-zinc-900/40'
+              }`}
+            >
+              <Award className="w-3.5 h-3.5" /> Games Played
             </button>
           </div>
 

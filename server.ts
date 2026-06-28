@@ -41,11 +41,32 @@ interface Farmer {
   timeOnWebsite?: number;
   invites?: number;
   invitedBy?: string;
+  gamesPlayed?: Record<string, number>;
+  totalGamesPlayed?: number;
+  discordMessagesCount?: number;
+}
+
+interface Giveaway {
+  id: string;
+  prizeType: 'role' | 'ap' | 'minecraft' | 'other';
+  prizeName: string;
+  rewardValue?: number;
+  requirements: {
+    discordMessages?: number;
+    gamesPlayed?: number;
+  };
+  participants: string[];
+  winner?: string;
+  startedBy: string;
+  startedAt: number;
+  endedAt?: number;
+  status: 'active' | 'ended';
 }
 
 async function startServer() {
   const app = express();
   app.use(express.json({
+    limit: '50mb',
     verify: (req: any, res, buf) => {
       req.rawBody = buf.toString('utf-8');
     }
@@ -95,6 +116,7 @@ async function startServer() {
     price: number;
     purchasedAt: number;
   }> = [];
+  let giveaways: Giveaway[] = [];
 
   interface AuditReport {
     timestamp: number;
@@ -126,12 +148,35 @@ async function startServer() {
         auditReports,
         lastAuditTimestamp,
         discordBotSecret,
-        puzzleImages
+        puzzleImages,
+        giveaways
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
       console.error('Error saving to persistent storage:', err);
     }
+  };
+
+  const recordGamePlayed = (playerName: string, gameKey: string) => {
+    let farmer = farmers[playerName];
+    if (!farmer) {
+      farmers[playerName] = {
+        name: playerName,
+        points: 0,
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: Date.now(),
+        streak: 0,
+        timeOnWebsite: 0,
+        invites: 0
+      };
+      farmer = farmers[playerName];
+    }
+    if (!farmer.gamesPlayed) {
+      farmer.gamesPlayed = {};
+    }
+    farmer.gamesPlayed[gameKey] = (farmer.gamesPlayed[gameKey] || 0) + 1;
+    farmer.totalGamesPlayed = (farmer.totalGamesPlayed || 0) + 1;
+    saveData();
   };
 
   const loadData = () => {
@@ -143,19 +188,15 @@ async function startServer() {
         if (parsed.lastDailyClaims) lastDailyClaims = parsed.lastDailyClaims;
         if (parsed.customRoles) customRoles = parsed.customRoles;
         if (parsed.presetRolePurchases) presetRolePurchases = parsed.presetRolePurchases;
+        if (parsed.giveaways) giveaways = parsed.giveaways;
         if (parsed.dailyTransfers) dailyTransfers = parsed.dailyTransfers;
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
         if (parsed.lastAuditTimestamp) lastAuditTimestamp = parsed.lastAuditTimestamp;
         if (parsed.puzzleImages) {
-          puzzleImages = parsed.puzzleImages;
+          puzzleImages = parsed.puzzleImages.filter((img: any) => img.uploadedBy !== 'System');
         } else {
-          puzzleImages = [
-            { id: 'img_default1', url: 'https://images.unsplash.com/photo-1579783900882-c0d3dad7b119?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() },
-            { id: 'img_default2', url: 'https://images.unsplash.com/photo-1515260268569-9271009adfdb?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() },
-            { id: 'img_default3', url: 'https://images.unsplash.com/photo-1508739773434-c26b3d09e071?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() },
-            { id: 'img_default4', url: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=500&q=80', uploadedBy: 'System', approved: true, createdAt: Date.now() }
-          ];
+          puzzleImages = [];
           saveData();
         }
         if (parsed.discordBotSecret) {
@@ -320,7 +361,7 @@ async function startServer() {
 
   // Start background Discord Gateway bot
   try {
-    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages);
+    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages, giveaways);
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
@@ -473,9 +514,17 @@ async function startServer() {
         `**${champion.name}** won the King of Diamonds session! Gained **+10 AP** (Total: **${farmers[champion.name]?.points?.toLocaleString()} AP** 💰).`,
         10181046
       );
+      // Record game played for everyone who participated in this match
+      activeKPlayers.forEach(p => {
+        recordGamePlayed(p.name, 'kotd');
+      });
       kotdPlaying = false;
     } else if (survivors.length === 0) {
       addLog('kotd', '💀 MATCH OVER! All players have been eliminated. Sudden Death!', 'danger');
+      // Record game played for everyone who participated in this match
+      activeKPlayers.forEach(p => {
+        recordGamePlayed(p.name, 'kotd');
+      });
       kotdPlaying = false;
     } else {
       // Trigger next round after 5s delay
@@ -665,6 +714,7 @@ async function startServer() {
         p.score += 1;
         mathPlaying = false; // pause to show success
         addLog('math', `🎉 Correct answer by ${p.name}! Answer was ${mathAnswer}.`, 'success');
+        recordGamePlayed(p.name, 'math');
         triggerNextMathRoundAfterDelay();
         res.json({ correct: true });
       } else {
@@ -728,6 +778,13 @@ async function startServer() {
     res.json(puzzleImages.filter(img => !img.approved));
   });
 
+  app.get('/api/puzzle/all', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    res.json(puzzleImages);
+  });
+
   app.post('/api/puzzle/upload', (req, res) => {
     const { url, name } = req.body;
     if (!url || !name) {
@@ -740,25 +797,57 @@ async function startServer() {
       return res.status(400).json({ error: 'This image has already been submitted!' });
     }
 
+    const isAdmin = isRequestAdmin(req);
+
     const newImg = {
       id: 'img_' + Math.random().toString(36).substring(2, 11),
       url,
       uploadedBy: name,
-      approved: false,
+      approved: isAdmin,
       createdAt: Date.now()
     };
     
     puzzleImages.push(newImg);
     saveData();
 
-    logActivity(
-      '🧩 Puzzle Image Submitted',
-      `**${name}** submitted a custom puzzle image/PFP for approval!\n` +
-      `It is pending review in the Admin Panel.`,
-      10181046
-    );
+    if (isAdmin) {
+      logActivity(
+        '🧩 Custom Puzzle Level Created',
+        `Administrator **${name}** created a direct, approved playable puzzle level/image!`,
+        3066993
+      );
+    } else {
+      logActivity(
+        '🧩 Puzzle Image Submitted',
+        `**${name}** submitted a custom puzzle image/PFP for approval!\n` +
+        `It is pending review in the Admin Panel.`,
+        10181046
+      );
+    }
 
     res.json({ success: true, image: newImg });
+  });
+
+  app.post('/api/puzzle/delete', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { id } = req.body;
+    const idx = puzzleImages.findIndex(i => i.id === id);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Image not found.' });
+    }
+
+    const deleted = puzzleImages.splice(idx, 1)[0];
+    saveData();
+
+    logActivity(
+      '🧩 Puzzle Image Deleted',
+      `Puzzle image/level by **${deleted.uploadedBy}** has been permanently deleted by an administrator.`,
+      15158332
+    );
+
+    res.json({ success: true });
   });
 
   app.post('/api/puzzle/approve', (req, res) => {
@@ -806,7 +895,7 @@ async function startServer() {
   });
 
   app.post('/api/puzzle/complete', (req, res) => {
-    const { name, gridSize } = req.body;
+    const { name, gridSize, withHints } = req.body;
     if (!name || !gridSize) {
       return res.status(400).json({ error: 'Missing name or gridSize.' });
     }
@@ -823,17 +912,41 @@ async function startServer() {
       farmer = farmers[name];
     }
 
+    const levelKey = `slide_puzzle_${gridSize}`;
+    if (!farmer.gamesPlayed) {
+      farmer.gamesPlayed = {};
+    }
+    const levelPlays = farmer.gamesPlayed[levelKey] || 0;
+
+    if (levelPlays >= 5) {
+      // Record game played but do not award points
+      recordGamePlayed(name, 'slide_puzzle');
+      return res.json({ 
+        success: true, 
+        rewardPoints: 0, 
+        newPoints: farmer.points,
+        message: `Level limit reached! You have already claimed rewards for ${gridSize}x${gridSize} difficulty 5 times.`
+      });
+    }
+
     // Determine rewards
-    let rewardPoints = 10;
-    if (gridSize === 4) rewardPoints = 20;
-    if (gridSize === 5) rewardPoints = 30;
+    let baseReward = 10;
+    if (gridSize === 4) baseReward = 20;
+    if (gridSize === 5) baseReward = 30;
+
+    const useHints = withHints !== false; // default to true
+    const rewardPoints = useHints ? baseReward : baseReward * 2;
 
     farmer.points = (farmer.points || 0) + rewardPoints;
+    farmer.gamesPlayed[levelKey] = levelPlays + 1;
     saveData();
+
+    // Record game played
+    recordGamePlayed(name, 'slide_puzzle');
 
     logActivity(
       '🧩 Puzzle Solved!',
-      `**${name}** has successfully solved a **${gridSize}x${gridSize}** slide puzzle!\n` +
+      `**${name}** has successfully solved a **${gridSize}x${gridSize}** slide puzzle (${useHints ? 'with hints' : 'NO HINTS - DOUBLE REWARD'}!) \n` +
       `Gained **+${rewardPoints} AP** (Balance: **${farmer.points.toLocaleString()} AP** 💰).`,
       3066993
     );
@@ -901,7 +1014,7 @@ async function startServer() {
       displayMessage = `😔 Bad luck! The coin landed on ${roll}. You lost ${bet} AP.`;
     }
 
-    saveData();
+    recordGamePlayed(name, 'coinflip');
 
     res.json({
       success: true,
@@ -1032,7 +1145,7 @@ async function startServer() {
 
     farmer.points = farmer.points - bet + payout;
     
-    saveData();
+    recordGamePlayed(name, 'slots');
 
     res.json({
       success: true,
@@ -1043,6 +1156,147 @@ async function startServer() {
       newPoints: farmer.points,
       message: displayMessage
     });
+  });
+
+  // --- GIVEAWAY ENDPOINTS ---
+  app.get('/api/giveaways', (req, res) => {
+    res.json(giveaways);
+  });
+
+  app.post('/api/giveaways/create', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+
+    const { prizeType, prizeName, rewardValue, reqMessages, reqGames, adminUsername } = req.body;
+    if (!prizeType || !prizeName) {
+      return res.status(400).json({ error: 'Prize type and prize name are required.' });
+    }
+
+    const newId = 'gw_' + Math.random().toString(36).substring(2, 9);
+    const newGw: Giveaway = {
+      id: newId,
+      prizeType,
+      prizeName,
+      rewardValue: rewardValue ? parseInt(rewardValue, 10) : undefined,
+      requirements: {
+        discordMessages: reqMessages ? parseInt(reqMessages, 10) : undefined,
+        gamesPlayed: reqGames ? parseInt(reqGames, 10) : undefined
+      },
+      participants: [],
+      startedBy: adminUsername || 'Admin',
+      startedAt: Date.now(),
+      status: 'active'
+    };
+
+    giveaways.push(newGw);
+    saveData();
+
+    logActivity(
+      '🎉 New Giveaway Started!',
+      `**${newGw.startedBy}** started a giveaway for **${prizeName}** (ID: \`${newId}\`)\n` +
+      `Requirements - Messages: **${reqMessages || 0}** | Games Played: **${reqGames || 0}**`,
+      10181046
+    );
+
+    res.json({ success: true, giveaway: newGw });
+  });
+
+  app.post('/api/giveaways/enter', (req, res) => {
+    const { id, name } = req.body;
+    if (!id || !name) {
+      return res.status(400).json({ error: 'Missing id or name.' });
+    }
+
+    const g = giveaways.find(x => x.id === id);
+    if (!g) {
+      return res.status(404).json({ error: 'Giveaway not found.' });
+    }
+
+    if (g.status !== 'active') {
+      return res.status(400).json({ error: 'This giveaway is no longer active.' });
+    }
+
+    if (g.participants.includes(name)) {
+      return res.status(400).json({ error: 'You have already entered this giveaway!' });
+    }
+
+    const farmer = farmers[name];
+    if (!farmer) {
+      return res.status(404).json({ error: 'Player profile not found. Please sync your points or set nickname.' });
+    }
+
+    // Verify requirements
+    if (g.requirements?.discordMessages) {
+      const userMsgs = farmer.discordMessagesCount || 0;
+      if (userMsgs < g.requirements.discordMessages) {
+        return res.status(400).json({ error: `Requirements not met! You need at least ${g.requirements.discordMessages} Discord messages. (You have: ${userMsgs})` });
+      }
+    }
+
+    if (g.requirements?.gamesPlayed) {
+      const userGames = farmer.totalGamesPlayed || 0;
+      if (userGames < g.requirements.gamesPlayed) {
+        return res.status(400).json({ error: `Requirements not met! You need at least ${g.requirements.gamesPlayed} games played. (You have: ${userGames})` });
+      }
+    }
+
+    g.participants.push(name);
+    saveData();
+
+    res.json({ success: true, participantsCount: g.participants.length });
+  });
+
+  app.post('/api/giveaways/end', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing giveaway ID.' });
+    }
+
+    const g = giveaways.find(x => x.id === id);
+    if (!g) {
+      return res.status(404).json({ error: 'Giveaway not found.' });
+    }
+
+    if (g.status !== 'active') {
+      return res.status(400).json({ error: 'Giveaway is already ended.' });
+    }
+
+    g.status = 'ended';
+    g.endedAt = Date.now();
+
+    if (!g.participants || g.participants.length === 0) {
+      g.winner = undefined;
+      saveData();
+      return res.json({ success: true, winner: null, message: 'Giveaway ended with no participants.' });
+    }
+
+    const winnerIndex = Math.floor(Math.random() * g.participants.length);
+    const winnerName = g.participants[winnerIndex];
+    g.winner = winnerName;
+
+    // Auto-distribute reward if it's AP points
+    if (g.prizeType === 'ap' && g.rewardValue) {
+      const winnerFarmer = farmers[winnerName];
+      if (winnerFarmer) {
+        winnerFarmer.points = (winnerFarmer.points || 0) + g.rewardValue;
+      }
+    }
+
+    saveData();
+
+    logActivity(
+      '🎉 Giveaway Ended (Winner Drawn!)',
+      `The giveaway for **${g.prizeName}** has concluded!\n` +
+      `🏆 **Winner:** **${winnerName}** (chosen from **${g.participants.length}** participants!)`,
+      3066993
+    );
+
+    res.json({ success: true, winner: winnerName, participantsCount: g.participants.length });
   });
 
   // --- SHOP & DAILY CLAIM ENDPOINTS ---
@@ -1738,7 +1992,7 @@ async function startServer() {
       saveData();
     }
 
-    res.json({ points: farmer.points });
+    res.json({ points: farmer.points, farmer });
   });
 
   // --- TRANSFER POINTS ENDPOINT ---
@@ -1886,11 +2140,24 @@ async function startServer() {
       .sort((a, b) => b.invites - a.invites)
       .slice(0, 50);
 
+    // 5. Most Games Played Leaderboard
+    const gamesPlayedLeaderboard = [...activeFarmers]
+      .map(f => ({
+        name: f.name,
+        totalGamesPlayed: f.totalGamesPlayed || 0,
+        avatarUrl: f.avatarUrl,
+        discordUsername: f.discordUsername
+      }))
+      .filter(f => f.totalGamesPlayed > 0)
+      .sort((a, b) => b.totalGamesPlayed - a.totalGamesPlayed)
+      .slice(0, 50);
+
     res.json({
       ap: apLeaderboard,
       streak: streakLeaderboard,
       time: timeLeaderboard,
-      invites: invitesLeaderboard
+      invites: invitesLeaderboard,
+      gamesPlayed: gamesPlayedLeaderboard
     });
   });
 

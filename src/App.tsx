@@ -32,12 +32,12 @@ import Highlights from './components/Highlights';
 import Staff from './components/Staff';
 import AuraGames from './components/AuraGames';
 import AFKFarming from './components/AFKFarming';
-import EidGift from './components/EidGift';
 import Shop from './components/Shop';
 import TransferModal from './components/TransferModal';
 import AdminPanel from './components/AdminPanel';
 import Minecraft from './components/Minecraft';
 import Leaderboards from './components/Leaderboards';
+import Giveaways from './components/Giveaways';
 import { DiscordIcon } from './components/Icons';
 import AuthModal from './components/AuthModal';
 import { Tooltip } from './components/Tooltip';
@@ -167,6 +167,12 @@ export default function App() {
     const ref = urlParams.get('ref') || urlParams.get('invite');
     if (ref) {
       localStorage.setItem('aurlets_invited_by', ref);
+    }
+
+    const gameParam = urlParams.get('game');
+    if (gameParam && ['math', 'kotd', 'betting', 'puzzle'].includes(gameParam)) {
+      setActiveTab('games');
+    } else if (ref) {
       // Clean up URL so it doesn't clutter the address bar
       const newUrl = window.location.pathname + window.location.hash;
       window.history.replaceState({}, document.title, newUrl);
@@ -281,6 +287,21 @@ export default function App() {
     setShowAuthModal(false);
   };
 
+  const handleSimulateDiscordLogin = (name: string, id: string) => {
+    const mockUser = {
+      id: id || '840560998011502593',
+      username: name,
+      globalName: name,
+      avatarUrl: `https://cdn.discordapp.com/embed/avatars/${Math.floor(Math.random() * 6)}.png`
+    };
+    setDiscordUser(mockUser);
+    setNickname(name);
+    setAvatarUrl(mockUser.avatarUrl);
+    setIsLoggedIn(true);
+    setShowAuthModal(false);
+    showGlobalNotice(`Logged in as simulated Discord user **${name}**! 🎉`, 'success');
+  };
+
   const handleLogout = () => {
     setIsLoggedIn(false);
     setNickname('');
@@ -310,9 +331,9 @@ export default function App() {
     { id: 'games', label: 'AuraGames', icon: Gamepad2, tooltip: 'Play interactive games to win points' },
     { id: 'afk', label: 'AFK Farming', icon: Flame, tooltip: 'Farm Aura Points automatically by being AFK' },
     { id: 'leaderboards', label: 'Leaderboards 🏆', icon: Trophy, tooltip: 'Check out who is dominating the rankings' },
+    { id: 'giveaways', label: 'Giveaways 🎉', icon: Gift, tooltip: 'Participate in awesome community giveaways' },
     { id: 'minecraft', label: 'AuraCraft ⛏️', icon: ServerIcon, tooltip: 'Check live status of our Minecraft server' },
     { id: 'shop', label: 'Reward Shop 🛒', icon: ShoppingBag, tooltip: 'Redeem points for Custom Discord Roles & ranks' },
-    { id: 'gift', label: 'Eid Gift 🌙', icon: Gift, tooltip: 'Claim your special Eid gift reward' },
     ...(isAdmin ? [{ id: 'admin', label: 'Admin Panel ⚙️', icon: UserCheck, tooltip: 'Manage user points, custom roles, and redeem codes' }] : [])
   ];
 
@@ -362,6 +383,17 @@ export default function App() {
             showNotice={(msg, type) => showGlobalNotice(msg, type)}
           />
         );
+      case 'giveaways':
+        return (
+          <Giveaways
+            isLoggedIn={isLoggedIn}
+            nickname={nickname}
+            isAdmin={isAdmin}
+            discordUserId={discordUser?.id || ''}
+            onOpenAuthModal={() => setShowAuthModal(true)}
+            showNotice={(msg, type) => showGlobalNotice(msg, type)}
+          />
+        );
       case 'minecraft':
         return <Minecraft />;
       case 'shop':
@@ -376,8 +408,6 @@ export default function App() {
             discordUserId={discordUser?.id || ''}
           />
         );
-      case 'gift':
-        return <EidGift />;
       case 'admin':
         return isAdmin ? (
           <AdminPanel
@@ -707,6 +737,7 @@ export default function App() {
             onClose={() => setShowAuthModal(false)}
             onDiscordLogin={handleDiscordLogin}
             onCustomLogin={handleCustomLogin}
+            onSimulateDiscordLogin={handleSimulateDiscordLogin}
             discordConfigured={discordConfigured}
           />
         )}
