@@ -151,6 +151,7 @@ async function startServer() {
       timestamp: number;
       isLive: boolean;
     } | null;
+    dailyLimit?: number;
   }
 
   let spinGame: SpinGame = {
@@ -166,7 +167,8 @@ async function startServer() {
       { label: '25 AP', value: 25, type: 'win', color: '#10b981' },
       { label: 'Try Again', value: 0, type: 'win', color: '#6b7280' }
     ],
-    lastSpinResult: null
+    lastSpinResult: null,
+    dailyLimit: 1
   };
 
   // ELIMINATION SPIN GAME
@@ -217,6 +219,21 @@ async function startServer() {
   let lastAuditTimestamp: number = Date.now();
   let discordBotSecret: string = '';
 
+  let customRolePrice = 49999;
+  let presetRolesPriceList = [
+    { id: '1417575135279452221', name: 'Blossom 🌸', emoji: '🌸', price: 2500 },
+    { id: '1417674566515560529', name: 'Overclocked ⚡', emoji: '⚡', price: 5000 },
+    { id: '1417679884733649007', name: 'Shieldbearer 🛡️', emoji: '🛡️', price: 7500 },
+    { id: '1423454938784075949', name: 'The Honored One', emoji: '💫', price: 10000 },
+    { id: '1417681913069572267', name: 'Ribbon Rebel 🎀', emoji: '🎀', price: 12500 },
+    { id: '1417688194098659389', name: 'Warrior ⚔️', emoji: '⚔️', price: 15000 },
+    { id: '1417689418034319394', name: 'Guardian 🪽', emoji: '🪽', price: 17500 },
+    { id: '1420103265298813009', name: 'Viber 🎧', emoji: '🎧', price: 20000 },
+    { id: '1420108774445682719', name: 'Elite 💸', emoji: '💸', price: 22500 },
+    { id: '1417692877227561064', name: 'Royal ⚜️', emoji: '⚜️', price: 25000 }
+  ];
+  let dailyUserSpins: Record<string, Record<string, number>> = {}; // username -> { YYYY-MM-DD: spin_count }
+
   const DATA_FILE = path.join(process.cwd(), 'data-store.json');
 
   const saveData = () => {
@@ -237,7 +254,10 @@ async function startServer() {
         kotdRewardsEnabled,
         maintenanceMode,
         spinGame,
-        eliminationGame
+        eliminationGame,
+        customRolePrice,
+        presetRolesPriceList,
+        dailyUserSpins
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -289,6 +309,9 @@ async function startServer() {
         if (parsed.eliminationGame) {
           eliminationGame = parsed.eliminationGame;
         }
+        if (parsed.customRolePrice !== undefined) customRolePrice = parsed.customRolePrice;
+        if (parsed.presetRolesPriceList !== undefined) presetRolesPriceList = parsed.presetRolesPriceList;
+        if (parsed.dailyUserSpins) dailyUserSpins = parsed.dailyUserSpins;
         if (parsed.dailyTransfers) dailyTransfers = parsed.dailyTransfers;
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
@@ -1390,7 +1413,8 @@ async function startServer() {
     }
     const rawMultiplier = 1.0 / prob;
     const multiplier = rawMultiplier * 0.96; // 4% house edge
-    return Math.max(1.01, Number(multiplier.toFixed(2)));
+    const finalMult = Math.max(1.01, Number(multiplier.toFixed(2)));
+    return Math.min(10.0, finalMult);
   }
 
   app.post('/api/game/bet/mines/start', (req, res) => {
@@ -1827,7 +1851,7 @@ async function startServer() {
       return res.status(400).json({ error: 'Missing required role configuration parameter(s).' });
     }
 
-    const cost = 49999; // Custom role cost in Aura Points
+    const cost = customRolePrice; // Custom role cost in Aura Points
     const userPoints = currentPoints !== undefined ? currentPoints : (farmers[name]?.points || 0);
 
     const userRolesCount = customRoles.filter(role => role.creator === name).length;
@@ -2139,7 +2163,7 @@ async function startServer() {
       return res.status(400).json({ error: 'Missing required purchase parameters.' });
     }
 
-    const targetRole = PRESET_ROLES.find(r => r.id === roleId);
+    const targetRole = presetRolesPriceList.find(r => r.id === roleId);
     if (!targetRole) {
       return res.status(400).json({ error: 'Invalid preset role selection.' });
     }
@@ -2367,6 +2391,29 @@ async function startServer() {
       return res.json(presetRolePurchases.filter(p => p.username === username));
     }
     res.json(presetRolePurchases);
+  });
+
+  // --- SHOP CONFIG ENDPOINTS ---
+  app.get('/api/shop/config', (req, res) => {
+    res.json({
+      customRolePrice,
+      presetRoles: presetRolesPriceList
+    });
+  });
+
+  app.post('/api/admin/shop/config', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { customRolePrice: newPrice, presetRoles: newPresetRoles } = req.body;
+    if (newPrice !== undefined && typeof newPrice === 'number' && !isNaN(newPrice)) {
+      customRolePrice = newPrice;
+    }
+    if (newPresetRoles !== undefined && Array.isArray(newPresetRoles)) {
+      presetRolesPriceList = newPresetRoles;
+    }
+    saveData();
+    res.json({ success: true, customRolePrice, presetRoles: presetRolesPriceList });
   });
 
   // --- ADMIN HELPER ---
