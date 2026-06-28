@@ -1,3 +1,6 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -71,7 +74,7 @@ async function startServer() {
       req.rawBody = buf.toString('utf-8');
     }
   }));
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   // --- IN-MEMORY BACKEND STATE ---
   let farmers: Record<string, Farmer> = {};
@@ -3622,9 +3625,9 @@ Guidelines for your responses:
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-
+console.log("PORT =", process.env.PORT);
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on http://fi6.bot-hosting.net:${PORT}`);
   });
 }
 
