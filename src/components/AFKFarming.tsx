@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Clock, UserCheck, Flame, Sparkles, LogIn, Trophy, Award } from 'lucide-react';
+import { Clock, UserCheck, Flame, Sparkles, LogIn, Trophy, Award, Moon, Coffee } from 'lucide-react';
 import { DiscordIcon } from './Icons';
 import { Tooltip } from './Tooltip';
 
@@ -22,6 +22,21 @@ interface AFKFarmingProps {
   onOpenAuthModal: () => void;
 }
 
+const formatDuration = (ms: number): string => {
+  if (ms <= 0) return '0s';
+  const seconds = Math.floor(ms / 1000) % 60;
+  const minutes = Math.floor(ms / (1000 * 60)) % 60;
+  const hours = Math.floor(ms / (1000 * 60 * 60)) % 24;
+  const days = Math.floor(ms / (1000 * 60 * 60 * 24));
+  
+  let parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+  return parts.join(' ');
+};
+
 export default function AFKFarming({
   nickname,
   avatarUrl,
@@ -37,6 +52,16 @@ export default function AFKFarming({
 
   // Real-time live leaderboard
   const [leaderboard, setLeaderboard] = useState<LeaderboardUser[]>([]);
+
+  // AFK Users list
+  interface AfkUser {
+    name: string;
+    avatarUrl: string;
+    isAfk: boolean;
+    afkSince: number;
+    afkReason: string;
+  }
+  const [afkUsersList, setAfkUsersList] = useState<AfkUser[]>([]);
 
   // Loaded dynamically from localStorage
   const [userColor, setUserColor] = useState<string | null>(null);
@@ -82,6 +107,28 @@ export default function AFKFarming({
 
     fetchLeaderboard();
     const interval = setInterval(fetchLeaderboard, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Fetch AFK Users list
+  useEffect(() => {
+    const fetchAfkList = async () => {
+      try {
+        const res = await fetch('/api/afk/list');
+        if (res.ok) {
+          const contentType = res.headers.get('content-type');
+          if (contentType && contentType.includes('application/json')) {
+            const data = await res.json();
+            setAfkUsersList(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching AFK users list:', err);
+      }
+    };
+
+    fetchAfkList();
+    const interval = setInterval(fetchAfkList, 4000);
     return () => clearInterval(interval);
   }, []);
 
@@ -274,72 +321,129 @@ export default function AFKFarming({
           </AnimatePresence>
         </div>
 
-        {/* Global Leaderboard Panel */}
-        <div className="lg:col-span-4 bg-zinc-900/30 border border-zinc-800/80 rounded-2xl p-6 shadow-xl space-y-6">
-          <h3 className="text-base font-bold text-white flex items-center gap-2">
-            <Trophy className="w-4 h-4 text-yellow-400" /> Top Aura Farmers
-          </h3>
+        {/* Right Sidebar: Leaderboard & AFK Users */}
+        <div className="lg:col-span-4 space-y-6">
+          {/* Global Leaderboard Panel */}
+          <div className="bg-zinc-900/30 border border-zinc-800/80 rounded-2xl p-6 shadow-xl space-y-6">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Trophy className="w-4 h-4 text-yellow-400" /> Top Aura Farmers
+            </h3>
 
-          <div className="space-y-3.5">
-            {leaderboard.length === 0 ? (
-              <div className="text-center py-8 text-zinc-500 text-xs font-mono">
-                No active farmers right now.
-              </div>
-            ) : (
-              leaderboard.map((user, idx) => (
-                <div 
-                  key={user.name} 
-                  className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
-                    idx === 0 
-                      ? 'bg-yellow-500/5 border-yellow-500/20' 
-                      : idx === 1 
-                        ? 'bg-zinc-400/5 border-zinc-400/10' 
-                        : 'bg-zinc-900/45 border-zinc-800/40'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    {/* Position number */}
-                    <span className={`w-5 shrink-0 text-center font-bold font-mono text-xs ${
-                      idx === 0 ? 'text-yellow-400' : idx === 1 ? 'text-zinc-400' : 'text-zinc-500'
-                    }`}>
-                      {idx + 1}
-                    </span>
-                    
-                    {/* Avatar */}
-                    <img 
-                      src={user.avatarUrl} 
-                      alt={user.name} 
-                      className="w-8 h-8 rounded-full object-cover shrink-0 animate-[pulse_3s_infinite]" 
-                      style={user.name === nickname && hasFrame ? {
-                        border: `1.5px solid ${userFrameColor}`,
-                        boxShadow: `0 0 8px ${userFrameColor}80`
-                      } : {
-                        border: '1px solid var(--color-zinc-800)'
-                      }}
-                      referrerPolicy="no-referrer"
-                    />
-                    
-                    {/* Name */}
-                    <span 
-                      className="text-xs font-bold truncate"
-                      style={user.name === nickname && userColor ? { color: userColor } : { color: 'var(--color-zinc-100)' }}
-                    >
-                      {user.name}
-                    </span>
-                  </div>
-
-                  {/* Score */}
-                  <div className="flex items-center gap-1 font-mono text-xs font-bold text-emerald-400 shrink-0">
-                    <Flame className="w-3.5 h-3.5 fill-emerald-400/10" /> {user.points} pts
-                  </div>
+            <div className="space-y-3.5">
+              {leaderboard.length === 0 ? (
+                <div className="text-center py-8 text-zinc-500 text-xs font-mono">
+                  No active farmers right now.
                 </div>
-              ))
-            )}
+              ) : (
+                leaderboard.map((user, idx) => (
+                  <div 
+                    key={user.name} 
+                    className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
+                      idx === 0 
+                        ? 'bg-yellow-500/5 border-yellow-500/20' 
+                        : idx === 1 
+                          ? 'bg-zinc-400/5 border-zinc-400/10' 
+                          : 'bg-zinc-900/45 border-zinc-800/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      {/* Position number */}
+                      <span className={`w-5 shrink-0 text-center font-bold font-mono text-xs ${
+                        idx === 0 ? 'text-yellow-400' : idx === 1 ? 'text-zinc-400' : 'text-zinc-500'
+                      }`}>
+                        {idx + 1}
+                      </span>
+                      
+                      {/* Avatar */}
+                      <img 
+                        src={user.avatarUrl} 
+                        alt={user.name} 
+                        className="w-8 h-8 rounded-full object-cover shrink-0 animate-[pulse_3s_infinite]" 
+                        style={user.name === nickname && hasFrame ? {
+                          border: `1.5px solid ${userFrameColor}`,
+                          boxShadow: `0 0 8px ${userFrameColor}80`
+                        } : {
+                          border: '1px solid var(--color-zinc-800)'
+                        }}
+                        referrerPolicy="no-referrer"
+                      />
+                      
+                      {/* Name */}
+                      <span 
+                        className="text-xs font-bold truncate"
+                        style={user.name === nickname && userColor ? { color: userColor } : { color: 'var(--color-zinc-100)' }}
+                      >
+                        {user.name}
+                      </span>
+                    </div>
+
+                    {/* Score */}
+                    <div className="flex items-center gap-1 font-mono text-xs font-bold text-emerald-400 shrink-0">
+                      <Flame className="w-3.5 h-3.5 fill-emerald-400/10" /> {user.points} pts
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <p className="text-[10px] text-zinc-500 text-center font-mono">
+              Leaderboard updates live as members farm aura on the server. Join today to get your name listed!
+            </p>
           </div>
 
-          <p className="text-[10px] text-zinc-500 text-center font-mono">
-            Leaderboard updates live as members farm aura on the server. Join today to get your name listed!
-          </p>
+          {/* AFK Status Users Panel */}
+          <div className="bg-zinc-900/30 border border-zinc-800/80 rounded-2xl p-6 shadow-xl space-y-6">
+            <h3 className="text-base font-bold text-white flex items-center gap-2">
+              <Moon className="w-4 h-4 text-indigo-400 animate-pulse" /> Currently AFK
+            </h3>
+
+            <div className="space-y-3.5">
+              {afkUsersList.length === 0 ? (
+                <div className="text-center py-8 text-zinc-500 text-xs font-mono">
+                  No users are currently AFK.
+                </div>
+              ) : (
+                afkUsersList.map((user) => (
+                  <div 
+                    key={user.name} 
+                    className="p-3 rounded-xl border bg-zinc-900/45 border-zinc-800/40 flex flex-col gap-2"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {/* Avatar */}
+                        <img 
+                          src={user.avatarUrl} 
+                          alt={user.name} 
+                          className="w-8 h-8 rounded-full object-cover shrink-0"
+                          referrerPolicy="no-referrer"
+                        />
+                        
+                        {/* Name */}
+                        <span className="text-xs font-bold text-zinc-100 truncate">
+                          {user.name}
+                        </span>
+                      </div>
+
+                      {/* AFK Duration */}
+                      <span className="text-[10px] font-mono text-zinc-400 font-medium">
+                        {formatDuration(Date.now() - user.afkSince)}
+                      </span>
+                    </div>
+
+                    {/* Reason */}
+                    <div className="text-xs font-medium text-amber-400/90 pl-10 leading-relaxed break-words flex items-center gap-1.5">
+                      <Coffee className="w-3.5 h-3.5 shrink-0 text-amber-500/80" />
+                      <span>{user.afkReason}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <p className="text-[10px] text-zinc-500 text-center font-mono">
+              Users set AFK via Discord or using the bot. Sending a message clears AFK status.
+            </p>
+          </div>
         </div>
       </div>
     </div>

@@ -12,11 +12,12 @@ import {
   CheckCircle, 
   AlertTriangle,
   UserCheck,
-  Database,
-  Download,
-  Upload,
-  Image,
-  X
+  Database, 
+  Download, 
+  Upload, 
+  Image, 
+  X,
+  Wrench
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -56,7 +57,7 @@ export default function AdminPanel({
   discordConfigured,
   onPointsUpdated
 }: AdminPanelProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles'>('users');
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles' | 'maintenance'>('users');
   
   // States for Puzzle Images approval
   const [pendingPuzzles, setPendingPuzzles] = useState<Array<{ id: string; url: string; uploadedBy: string; approved: boolean; createdAt: number }>>([]);
@@ -77,6 +78,12 @@ export default function AdminPanel({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [backupStats, setBackupStats] = useState<{ usersCount: number; customRolesCount: number; redeemCodesCount: number; exportedAt: number } | null>(null);
   
+  // Backups History States
+  const [backupsHistory, setBackupsHistory] = useState<any[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isCreatingBackup, setIsCreatingBackup] = useState(false);
+  const [isRestoringBackupId, setIsRestoringBackupId] = useState<string | null>(null);
+  
   // States for User Management
   const [users, setUsers] = useState<Farmer[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -95,6 +102,12 @@ export default function AdminPanel({
   const [lastAuditTimestamp, setLastAuditTimestamp] = useState<number | null>(null);
   const [isLoadingAudit, setIsLoadingAudit] = useState(false);
   const [isTriggeringAudit, setIsTriggeringAudit] = useState(false);
+
+  // States for Maintenance Mode settings
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState<boolean>(false);
+  const [maintenanceFullWebsite, setMaintenanceFullWebsite] = useState<boolean>(false);
+  const [maintenanceCategories, setMaintenanceCategories] = useState<string[]>([]);
+  const [isSavingMaintenance, setIsSavingMaintenance] = useState<boolean>(false);
 
   // General feedback notice
   const [notice, setNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -375,11 +388,82 @@ export default function AdminPanel({
     }
   };
 
+  const fetchBackupsHistory = async () => {
+    setIsLoadingHistory(true);
+    try {
+      const res = await fetch('/api/admin/backups/history', {
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBackupsHistory(data.history || []);
+      }
+    } catch (err: any) {
+      console.error('Error fetching backups history:', err);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  };
+
+  const fetchMaintenanceSettings = async () => {
+    try {
+      const res = await fetch('/api/maintenance/status');
+      if (res.ok) {
+        const data = await res.json();
+        setMaintenanceEnabled(data.enabled);
+        setMaintenanceFullWebsite(data.fullWebsite);
+        setMaintenanceCategories(data.categories || []);
+      }
+    } catch (err) {
+      console.error('Error fetching maintenance settings:', err);
+    }
+  };
+
+  const handleSaveMaintenance = async () => {
+    setIsSavingMaintenance(true);
+    try {
+      const res = await fetch('/api/admin/maintenance', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({
+          enabled: maintenanceEnabled,
+          fullWebsite: maintenanceFullWebsite,
+          categories: maintenanceCategories
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice('Maintenance settings successfully updated and applied!', 'success');
+      } else {
+        showNotice(data.error || 'Failed to update maintenance settings.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Error saving maintenance settings.', 'error');
+    } finally {
+      setIsSavingMaintenance(false);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
     fetchCodes();
     fetchAuditReports();
+    fetchBackupsHistory();
+    fetchMaintenanceSettings();
   }, [adminDiscordId, adminUsername]);
+
+  useEffect(() => {
+    if (activeSubTab === 'backup') {
+      fetchBackupsHistory();
+    }
+  }, [activeSubTab]);
 
   // --- ACTIONS ---
   const handleUpdatePoints = async (userName: string) => {
@@ -529,6 +613,7 @@ export default function AdminPanel({
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       showNotice('Website progress successfully exported as .aurlets file!', 'success');
+      fetchBackupsHistory();
     } catch (err: any) {
       showNotice(err.message || 'Failed to export backup.', 'error');
     } finally {
@@ -565,6 +650,7 @@ export default function AdminPanel({
             fetchUsers();
             fetchCodes();
             fetchAuditReports();
+            fetchBackupsHistory();
           } else {
             showNotice(data.error || 'Failed to import backup.', 'error');
           }
@@ -578,6 +664,96 @@ export default function AdminPanel({
     } catch (err: any) {
       showNotice(err.message || 'Failed to read backup file.', 'error');
       setIsImporting(false);
+    }
+  };
+
+  const handleCreateBackupPoint = async () => {
+    setIsCreatingBackup(true);
+    try {
+      const res = await fetch('/api/admin/backups/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice('Successfully created a new backup point on the server!', 'success');
+        fetchBackupsHistory();
+      } else {
+        showNotice(data.error || 'Failed to create backup point.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Error creating backup point.', 'error');
+    } finally {
+      setIsCreatingBackup(false);
+    }
+  };
+
+  const handleRestoreBackupPoint = async (id: string) => {
+    if (!window.confirm('Are you absolutely sure you want to restore this backup? This will overwrite your current progress (we will create a recovery save point automatically before applying).')) {
+      return;
+    }
+    setIsRestoringBackupId(id);
+    try {
+      const res = await fetch('/api/admin/backups/restore', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice('Successfully restored backup point!', 'success');
+        setBackupStats({
+          usersCount: data.stats.usersCount,
+          customRolesCount: data.stats.customRolesCount,
+          redeemCodesCount: data.stats.redeemCodesCount,
+          exportedAt: data.stats.exportedAt
+        });
+        // Refresh states
+        fetchUsers();
+        fetchCodes();
+        fetchAuditReports();
+        fetchBackupsHistory();
+      } else {
+        showNotice(data.error || 'Failed to restore backup.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Error restoring backup point.', 'error');
+    } finally {
+      setIsRestoringBackupId(null);
+    }
+  };
+
+  const handleDeleteBackupPoint = async (id: string) => {
+    if (!window.confirm('Are you sure you want to delete this backup point from the server?')) {
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/backups/delete', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice('Deleted backup point from history.', 'success');
+        fetchBackupsHistory();
+      } else {
+        showNotice(data.error || 'Failed to delete backup point.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Error deleting backup point.', 'error');
     }
   };
 
@@ -675,6 +851,19 @@ export default function AdminPanel({
             }`}
           >
             <Image className="w-4 h-4 text-pink-400" /> Pending Puzzle Images ({pendingPuzzles.length})
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('maintenance');
+              fetchMaintenanceSettings();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'maintenance'
+                ? 'bg-amber-600 text-white shadow shadow-amber-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <Wrench className="w-4 h-4 text-amber-500" /> Maintenance Mode 🛠️
           </button>
         </div>
 
@@ -1078,6 +1267,7 @@ export default function AdminPanel({
                     <li>Active Promo Codes ({codes.length} codes)</li>
                     <li>Global and AFK leaderboards</li>
                     <li>Point growths & system Audit logs</li>
+                    <li>Puzzle image progress & Giveaways list</li>
                   </ul>
                 </div>
               </div>
@@ -1216,6 +1406,119 @@ export default function AdminPanel({
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Historical rolling backup panel */}
+          <div className="p-6 rounded-2xl border border-zinc-900 bg-zinc-950/40 space-y-6 text-left">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Database className="w-5 h-5 text-pink-500" />
+                  Rolling Backups History (Last 10)
+                </h3>
+                <p className="text-zinc-400 text-xs mt-1">
+                  Rolling backup restore points automatically generated on crucial actions or created manually. Restore any point instantly.
+                </p>
+              </div>
+
+              <button
+                onClick={handleCreateBackupPoint}
+                disabled={isCreatingBackup}
+                className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white font-bold text-xs rounded-xl flex items-center gap-2 transition-all disabled:opacity-50"
+              >
+                {isCreatingBackup ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-pink-400" />
+                ) : (
+                  <Plus className="w-4 h-4 text-pink-400" />
+                )}
+                <span>Create Local Backup Point</span>
+              </button>
+            </div>
+
+            {isLoadingHistory ? (
+              <div className="py-12 flex flex-col items-center justify-center gap-2 text-zinc-500">
+                <RefreshCw className="w-8 h-8 animate-spin text-zinc-600" />
+                <span className="text-xs font-mono">Loading backups list...</span>
+              </div>
+            ) : backupsHistory.length === 0 ? (
+              <div className="py-8 text-center border border-dashed border-zinc-900 rounded-xl bg-zinc-900/10 text-zinc-500">
+                <Database className="w-8 h-8 mx-auto mb-2 text-zinc-700" />
+                <p className="text-xs font-mono">No backup points saved yet.</p>
+                <p className="text-[10px] text-zinc-600 mt-1">Trigger exports, imports, or click "Create Local Backup Point" above to start saving progress states.</p>
+              </div>
+            ) : (
+              <div className="space-y-3.5">
+                {backupsHistory.map((backup) => {
+                  const date = new Date(backup.timestamp);
+                  const isRestoring = isRestoringBackupId === backup.id;
+
+                  return (
+                    <div
+                      key={backup.id}
+                      className="p-4 rounded-xl border border-zinc-900 bg-zinc-900/10 hover:border-zinc-800 transition-all flex flex-col md:flex-row justify-between items-start md:items-center gap-4"
+                    >
+                      <div className="space-y-1.5 flex-1 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-bold text-white truncate">
+                            {backup.trigger}
+                          </span>
+                          <span className="text-[9px] font-mono px-2 py-0.5 rounded-full bg-pink-500/10 border border-pink-500/20 text-pink-400">
+                            ID: {backup.id}
+                          </span>
+                        </div>
+                        
+                        <div className="text-[10px] text-zinc-500 font-mono">
+                          {date.toLocaleString()}
+                        </div>
+
+                        {/* Stats grid */}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-zinc-400 font-mono pt-1">
+                          <span className="flex items-center gap-1">
+                            <Users className="w-3.5 h-3.5 text-zinc-500" /> Users: <strong className="text-zinc-200">{backup.stats?.usersCount ?? 0}</strong>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Gift className="w-3.5 h-3.5 text-zinc-500" /> Codes: <strong className="text-zinc-200">{backup.stats?.redeemCodesCount ?? 0}</strong>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Award className="w-3.5 h-3.5 text-zinc-500" /> Roles: <strong className="text-zinc-200">{backup.stats?.customRolesCount ?? 0}</strong>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Image className="w-3.5 h-3.5 text-zinc-500" /> Puzzle Imgs: <strong className="text-zinc-200">{backup.stats?.puzzleImagesCount ?? 0}</strong>
+                          </span>
+                          <span className="flex items-center gap-1">
+                            <Database className="w-3.5 h-3.5 text-zinc-500" /> Giveaways: <strong className="text-zinc-200">{backup.stats?.giveawaysCount ?? 0}</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 self-stretch md:self-auto justify-end border-t border-zinc-900/50 md:border-0 pt-3 md:pt-0">
+                        <button
+                          onClick={() => handleRestoreBackupPoint(backup.id)}
+                          disabled={!!isRestoringBackupId}
+                          className="px-3.5 py-2 bg-emerald-950/40 border border-emerald-500/20 text-emerald-400 hover:text-white text-xs font-bold rounded-xl transition-all flex items-center gap-1.5"
+                        >
+                          {isRestoring ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="w-3.5 h-3.5" />
+                          )}
+                          <span>Restore</span>
+                        </button>
+                        
+                        <button
+                          onClick={() => handleDeleteBackupPoint(backup.id)}
+                          disabled={!!isRestoringBackupId}
+                          className="p-2 bg-zinc-900 hover:bg-red-950/40 border border-zinc-800 hover:border-red-500/20 text-zinc-400 hover:text-red-400 rounded-xl transition-all"
+                          title="Delete Backup Point"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1452,6 +1755,149 @@ export default function AdminPanel({
               </div>
             )
           )}
+        </div>
+      )}
+
+      {activeSubTab === 'maintenance' && (
+        <div className="space-y-6 text-left animate-fade-in">
+          <div className="border-b border-zinc-900 pb-3">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Wrench className="w-5 h-5 text-amber-500" /> Maintenance Mode Config
+            </h3>
+            <p className="text-zinc-400 text-xs font-medium">
+              Toggle full website or specific section-level maintenance modes. Whitelisted admins bypass maintenance checks.
+            </p>
+          </div>
+
+          <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-6">
+            {/* Master Toggle */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 rounded-xl bg-zinc-900/40 border border-zinc-800/60 gap-4">
+              <div className="space-y-1">
+                <span className="text-xs font-mono uppercase tracking-widest text-amber-500 font-bold">Master Switch</span>
+                <h4 className="text-sm font-bold text-white">Enable Maintenance Mode</h4>
+                <p className="text-zinc-500 text-xs">Instantly apply maintenance screen blocks to normal users.</p>
+              </div>
+              <button
+                onClick={() => setMaintenanceEnabled(!maintenanceEnabled)}
+                className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+                  maintenanceEnabled
+                    ? 'bg-amber-600 text-white shadow shadow-amber-500/20'
+                    : 'bg-zinc-800 text-zinc-400 border border-zinc-700/50'
+                }`}
+              >
+                {maintenanceEnabled ? '🔴 Active (Maintenance On)' : '⚪ Inactive (Website Live)'}
+              </button>
+            </div>
+
+            {/* Scope selection */}
+            {maintenanceEnabled && (
+              <div className="space-y-5">
+                {/* Full Website vs Specific Categories */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div
+                    onClick={() => {
+                      setMaintenanceFullWebsite(true);
+                    }}
+                    className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                      maintenanceFullWebsite
+                        ? 'bg-red-500/5 border-red-500/30 text-white'
+                        : 'bg-zinc-900/20 border-zinc-850 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${maintenanceFullWebsite ? 'border-red-500' : 'border-zinc-700'}`}>
+                        {maintenanceFullWebsite && <div className="w-2 h-2 rounded-full bg-red-500" />}
+                      </div>
+                      <div className="text-left">
+                        <div className="text-xs font-bold text-white">Full Website Block</div>
+                        <div className="text-[10px] text-zinc-500">Every single page is blocked for non-admins</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => {
+                      setMaintenanceFullWebsite(false);
+                    }}
+                    className={`p-4 rounded-xl border cursor-pointer transition-all ${
+                      !maintenanceFullWebsite
+                        ? 'bg-amber-500/5 border-amber-500/30 text-white'
+                        : 'bg-zinc-900/20 border-zinc-850 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${!maintenanceFullWebsite ? 'border-amber-500' : 'border-zinc-700'}`}>
+                        {!maintenanceFullWebsite && <div className="w-2 h-2 rounded-full bg-amber-500" />}
+                      </div>
+                      <div className="text-left">
+                        <div className="text-xs font-bold text-white">Specific Categories Block</div>
+                        <div className="text-[10px] text-zinc-500">Only block certain subsections (e.g. Games, Giveaways)</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Categories Multiselect */}
+                {!maintenanceFullWebsite && (
+                  <div className="p-4 rounded-xl bg-zinc-900/20 border border-zinc-800/60 space-y-3">
+                    <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 font-bold">Select categories to lock down:</span>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                      {[
+                        { id: 'games', label: '🎮 AuraGames' },
+                        { id: 'giveaways', label: '🎉 Giveaways' },
+                        { id: 'staff', label: '🛡️ Staff Team' },
+                        { id: 'afk', label: '🔥 AFK Farming' },
+                        { id: 'shop', label: '🛒 Reward Shop' },
+                        { id: 'announcements', label: '📢 Announcements' },
+                        { id: 'highlights', label: '✨ Highlights' },
+                        { id: 'minecraft', label: '⛏️ AuraCraft' },
+                        { id: 'info', label: 'ℹ️ Information' },
+                        { id: 'home', label: '🏠 Dashboard Home' }
+                      ].map((cat) => {
+                        const isChecked = maintenanceCategories.includes(cat.id);
+                        return (
+                          <div
+                            key={cat.id}
+                            onClick={() => {
+                              if (isChecked) {
+                                setMaintenanceCategories(maintenanceCategories.filter((c) => c !== cat.id));
+                              } else {
+                                setMaintenanceCategories([...maintenanceCategories, cat.id]);
+                              }
+                            }}
+                            className={`p-2.5 rounded-xl border text-xs font-semibold cursor-pointer select-none transition-all flex items-center gap-2 ${
+                              isChecked
+                                ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-bold'
+                                : 'bg-zinc-950 text-zinc-500 border-zinc-850 hover:text-zinc-400'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => {}}
+                              className="accent-amber-500 pointer-events-none"
+                            />
+                            <span>{cat.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Save Action */}
+            <div className="flex justify-end pt-3">
+              <button
+                onClick={handleSaveMaintenance}
+                disabled={isSavingMaintenance}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-amber-600 to-yellow-600 hover:from-amber-500 hover:to-yellow-500 text-white text-xs font-black uppercase tracking-wider transition-all disabled:opacity-40 flex items-center gap-2 shadow-lg active:scale-95"
+              >
+                {isSavingMaintenance ? 'Saving Changes...' : 'Save & Deploy Settings'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,6 +1,3 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -8,6 +5,9 @@ import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { startDiscordBot } from './discord-bot.js';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // Global error handlers for process stabilization
 process.on('uncaughtException', (err) => {
@@ -47,6 +47,9 @@ interface Farmer {
   gamesPlayed?: Record<string, number>;
   totalGamesPlayed?: number;
   discordMessagesCount?: number;
+  isAfk?: boolean;
+  afkSince?: number;
+  afkReason?: string;
 }
 
 interface Giveaway {
@@ -120,6 +123,84 @@ async function startServer() {
     purchasedAt: number;
   }> = [];
   let giveaways: Giveaway[] = [];
+  let kotdRewardsEnabled: boolean = true;
+
+  // MAINTENANCE MODE STATE
+  let maintenanceMode = {
+    enabled: false,
+    fullWebsite: false,
+    categories: [] as string[]
+  };
+
+  // SPIN THE WHEEL STATE
+  interface SpinSegment {
+    label: string;
+    value: number; // AP gained/lost
+    type: 'win' | 'lose';
+    color: string;
+  }
+
+  interface SpinGame {
+    visibleToPublic: boolean;
+    allowedDiscordIds: string[]; // Whitelisted users who can spin
+    segments: SpinSegment[];
+    lastSpinResult: {
+      segmentIndex: number;
+      winnerName: string;
+      winnerId?: string;
+      timestamp: number;
+      isLive: boolean;
+    } | null;
+  }
+
+  let spinGame: SpinGame = {
+    visibleToPublic: false,
+    allowedDiscordIds: [],
+    segments: [
+      { label: '50 AP', value: 50, type: 'win', color: '#10b981' },
+      { label: 'Lose 50', value: -50, type: 'lose', color: '#ef4444' },
+      { label: '100 AP', value: 100, type: 'win', color: '#3b82f6' },
+      { label: 'Lose All', value: -99999, type: 'lose', color: '#7f1d1d' },
+      { label: '500 AP', value: 500, type: 'win', color: '#a855f7' },
+      { label: 'Jackpot 1000', value: 1000, type: 'win', color: '#f59e0b' },
+      { label: '25 AP', value: 25, type: 'win', color: '#10b981' },
+      { label: 'Try Again', value: 0, type: 'win', color: '#6b7280' }
+    ],
+    lastSpinResult: null
+  };
+
+  // ELIMINATION SPIN GAME
+  interface EliminationGame {
+    prize: string;
+    participants: Array<{ discordId: string; name: string }>; // list of custom entrants
+    remainingParticipants: Array<{ discordId: string; name: string }>;
+    lastEliminated: { discordId: string; name: string } | null;
+    winner: { discordId: string; name: string } | null;
+    isFinished: boolean;
+    history: string[]; // strings detailing the process
+  }
+
+  let eliminationGame: EliminationGame = {
+    prize: '1000 AP',
+    participants: [],
+    remainingParticipants: [],
+    lastEliminated: null,
+    winner: null,
+    isFinished: false,
+    history: []
+  };
+
+  interface ActiveMinesGame {
+    playerName: string;
+    betAmount: number;
+    minesCount: number;
+    grid: ('gem' | 'mine')[];
+    revealed: boolean[];
+    multiplier: number;
+    isGameOver: boolean;
+    isWin: boolean;
+  }
+  let activeMinesGames: Record<string, ActiveMinesGame> = {};
 
   interface AuditReport {
     timestamp: number;
@@ -152,7 +233,11 @@ async function startServer() {
         lastAuditTimestamp,
         discordBotSecret,
         puzzleImages,
-        giveaways
+        giveaways,
+        kotdRewardsEnabled,
+        maintenanceMode,
+        spinGame,
+        eliminationGame
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -192,6 +277,18 @@ async function startServer() {
         if (parsed.customRoles) customRoles = parsed.customRoles;
         if (parsed.presetRolePurchases) presetRolePurchases = parsed.presetRolePurchases;
         if (parsed.giveaways) giveaways = parsed.giveaways;
+        if (parsed.kotdRewardsEnabled !== undefined) {
+          kotdRewardsEnabled = parsed.kotdRewardsEnabled;
+        }
+        if (parsed.maintenanceMode) {
+          maintenanceMode = parsed.maintenanceMode;
+        }
+        if (parsed.spinGame) {
+          spinGame = parsed.spinGame;
+        }
+        if (parsed.eliminationGame) {
+          eliminationGame = parsed.eliminationGame;
+        }
         if (parsed.dailyTransfers) dailyTransfers = parsed.dailyTransfers;
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
@@ -231,7 +328,94 @@ async function startServer() {
     }
   };
 
+  interface ServerBackup {
+    id: string;
+    timestamp: number;
+    trigger: string;
+    stats: {
+      usersCount: number;
+      customRolesCount: number;
+      redeemCodesCount: number;
+      puzzleImagesCount: number;
+      giveawaysCount: number;
+    };
+    fileContent: string;
+  }
+  let backupsHistory: ServerBackup[] = [];
+
+  const BACKUPS_HISTORY_FILE = path.join(process.cwd(), 'backups-history.json');
+
+  const saveBackupsHistory = () => {
+    try {
+      fs.writeFileSync(BACKUPS_HISTORY_FILE, JSON.stringify(backupsHistory, null, 2), 'utf-8');
+    } catch (err) {
+      console.error('Error saving backups history:', err);
+    }
+  };
+
+  const loadBackupsHistory = () => {
+    try {
+      if (fs.existsSync(BACKUPS_HISTORY_FILE)) {
+        const content = fs.readFileSync(BACKUPS_HISTORY_FILE, 'utf-8');
+        backupsHistory = JSON.parse(content);
+      }
+    } catch (err) {
+      console.error('Error loading backups history:', err);
+    }
+  };
+
+  const createBackupPayload = (trigger: string): ServerBackup => {
+    const payload = {
+      farmers,
+      lastDailyClaims,
+      customRoles,
+      redeemCodes,
+      presetRolePurchases,
+      dailyTransfers,
+      dailyBetEarnings,
+      auditReports,
+      lastAuditTimestamp,
+      discordBotSecret,
+      puzzleImages,
+      giveaways,
+      kotdRewardsEnabled
+    };
+
+    const jsonStr = JSON.stringify({
+      type: 'AURLETS_WEBSITE_BACKUP',
+      version: 1,
+      exportedAt: Date.now(),
+      data: payload
+    });
+
+    const base64Data = Buffer.from(jsonStr, 'utf-8').toString('base64');
+    const fileContent = `AURLETS-BACKUP-V1:${base64Data}`;
+
+    return {
+      id: 'bak_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      timestamp: Date.now(),
+      trigger,
+      stats: {
+        usersCount: Object.keys(farmers).length,
+        customRolesCount: customRoles.length,
+        redeemCodesCount: Object.keys(redeemCodes).length,
+        puzzleImagesCount: (puzzleImages || []).length,
+        giveawaysCount: (giveaways || []).length
+      },
+      fileContent
+    };
+  };
+
+  const addBackupToHistory = (backup: ServerBackup) => {
+    backupsHistory.unshift(backup);
+    if (backupsHistory.length > 10) {
+      backupsHistory = backupsHistory.slice(0, 10);
+    }
+    saveBackupsHistory();
+  };
+
   loadData();
+  loadBackupsHistory();
 
   // Webhook activity logging for channel 1491811085613928571
   let botInstance: any = null;
@@ -431,9 +615,34 @@ async function startServer() {
     }, 3000);
   };
 
+  const declareKotdWinner = (champion: Player) => {
+    kotdPlaying = false;
+    const rewardPoints = kotdRewardsEnabled ? 10 : 0;
+    if (farmers[champion.name]) {
+      farmers[champion.name].points = (farmers[champion.name].points || 0) + rewardPoints;
+    }
+    addLog('kotd', `🏆 MATCH OVER! Everyone else left or became inactive. ${champion.name} is the winner (+${rewardPoints} AP)!`, 'success');
+    logActivity(
+      '👑 KOTD Game Champion',
+      `**${champion.name}** won the King of Diamonds session! Gained **+${rewardPoints} AP** (Total: **${farmers[champion.name]?.points?.toLocaleString()} AP** 💰).`,
+      10181046
+    );
+    // Record game played for participants
+    Object.values(kotdPlayers).forEach(p => {
+      recordGamePlayed(p.name, 'kotd');
+    });
+    // Reset players list
+    kotdPlayers = {};
+    saveData();
+  };
+
   // Process KOTD Round Strategy calculations
   const processKotdRound = () => {
     const activeKPlayers = Object.values(kotdPlayers).filter(p => Date.now() - p.lastActive < 8000);
+    if (activeKPlayers.length === 1) {
+      declareKotdWinner(activeKPlayers[0]);
+      return;
+    }
     if (activeKPlayers.length < 2) {
       kotdPlaying = false;
       addLog('kotd', 'Game canceled. Not enough active players left in the lobby.', 'danger');
@@ -507,21 +716,7 @@ async function startServer() {
 
     // 3. Check for match victory
     if (survivors.length === 1) {
-      const champion = survivors[0];
-      if (farmers[champion.name]) {
-        farmers[champion.name].points = (farmers[champion.name].points || 0) + 10;
-      }
-      addLog('kotd', `🏆 MATCH OVER! ${champion.name} is the last standing and wins the crown (+10 AP)!`, 'success');
-      logActivity(
-        '👑 KOTD Game Champion',
-        `**${champion.name}** won the King of Diamonds session! Gained **+10 AP** (Total: **${farmers[champion.name]?.points?.toLocaleString()} AP** 💰).`,
-        10181046
-      );
-      // Record game played for everyone who participated in this match
-      activeKPlayers.forEach(p => {
-        recordGamePlayed(p.name, 'kotd');
-      });
-      kotdPlaying = false;
+      declareKotdWinner(survivors[0]);
     } else if (survivors.length === 0) {
       addLog('kotd', '💀 MATCH OVER! All players have been eliminated. Sudden Death!', 'danger');
       // Record game played for everyone who participated in this match
@@ -529,6 +724,7 @@ async function startServer() {
         recordGamePlayed(p.name, 'kotd');
       });
       kotdPlaying = false;
+      kotdPlayers = {};
     } else {
       // Trigger next round after 5s delay
       if (kotdRoundTimeout) clearTimeout(kotdRoundTimeout);
@@ -568,8 +764,10 @@ async function startServer() {
 
     // Handle KOTD Game countdown
     if (kotdPlaying) {
-      const activeCount = Object.values(kotdPlayers).filter(p => now - p.lastActive < 8000).length;
-      if (activeCount < 2) {
+      const activeKPlayers = Object.values(kotdPlayers).filter(p => now - p.lastActive < 8000);
+      if (activeKPlayers.length === 1) {
+        declareKotdWinner(activeKPlayers[0]);
+      } else if (activeKPlayers.length < 1) {
         kotdPlaying = false;
         addLog('kotd', 'KOTD Arena suspended: Not enough active players.', 'danger');
       } else {
@@ -590,6 +788,20 @@ async function startServer() {
       points: f.points,
       avatarUrl: f.avatarUrl
     })).sort((a, b) => b.points - a.points);
+    res.json(list);
+  });
+
+  // 1b. GET currently AFK users list
+  app.get('/api/afk/list', (req, res) => {
+    const list = Object.values(farmers)
+      .filter(f => f.isAfk)
+      .map(f => ({
+        name: f.name,
+        avatarUrl: f.avatarUrl,
+        afkSince: f.afkSince || Date.now(),
+        afkReason: f.afkReason || 'No reason specified',
+        durationMs: Date.now() - (f.afkSince || Date.now())
+      }));
     res.json(list);
   });
 
@@ -764,6 +976,13 @@ async function startServer() {
       if (kotdPlayers[id]) {
         addLog('kotd', `${kotdPlayers[id].name} left the lobby.`, 'info');
         delete kotdPlayers[id];
+
+        if (kotdPlaying) {
+          const activeKPlayers = Object.values(kotdPlayers).filter(p => Date.now() - p.lastActive < 8000);
+          if (activeKPlayers.length === 1) {
+            declareKotdWinner(activeKPlayers[0]);
+          }
+        }
       }
     }
     res.json({ success: true });
@@ -1158,6 +1377,235 @@ async function startServer() {
       oldPoints,
       newPoints: farmer.points,
       message: displayMessage
+    });
+  });
+
+  // --- MINES CASINO GAME ENDPOINTS ---
+
+  function calculateMinesMultiplier(minesCount: number, revealedCount: number): number {
+    if (revealedCount <= 0) return 1.0;
+    let prob = 1.0;
+    for (let i = 0; i < revealedCount; i++) {
+      prob *= (25 - minesCount - i) / (25 - i);
+    }
+    const rawMultiplier = 1.0 / prob;
+    const multiplier = rawMultiplier * 0.96; // 4% house edge
+    return Math.max(1.01, Number(multiplier.toFixed(2)));
+  }
+
+  app.post('/api/game/bet/mines/start', (req, res) => {
+    const { name, betAmount, minesCount } = req.body;
+    if (!name || betAmount === undefined || minesCount === undefined) {
+      return res.status(400).json({ error: 'Missing required parameters: name, betAmount, minesCount' });
+    }
+
+    const farmer = farmers[name];
+    if (!farmer) {
+      return res.status(400).json({ error: 'Player profile not found. Please log in or set nickname.' });
+    }
+
+    const bet = Math.floor(Number(betAmount));
+    if (isNaN(bet) || bet < 5) {
+      return res.status(400).json({ error: 'Minimum bet is 5 Aura Points (AP).' });
+    }
+
+    if (farmer.points < bet) {
+      return res.status(400).json({ error: `Insufficient points! You only have ${farmer.points} AP.` });
+    }
+
+    const mCount = Math.floor(Number(minesCount));
+    if (isNaN(mCount) || mCount < 1 || mCount > 24) {
+      return res.status(400).json({ error: 'Mines count must be between 1 and 24.' });
+    }
+
+    // Daily betting earnings check
+    const today = new Date().toISOString().split('T')[0];
+    if (!dailyBetEarnings[name]) {
+      dailyBetEarnings[name] = {};
+    }
+    const earnedToday = dailyBetEarnings[name][today] || 0;
+    if (earnedToday >= 5000) {
+      return res.status(400).json({ error: 'You have reached your daily maximum betting earnings limit of 5000 AP for today! Try again tomorrow.' });
+    }
+
+    // Deduct bet amount immediately
+    farmer.points -= bet;
+
+    // Generate grid
+    const grid: ('gem' | 'mine')[] = Array(25).fill('gem');
+    let placedMines = 0;
+    while (placedMines < mCount) {
+      const idx = Math.floor(Math.random() * 25);
+      if (grid[idx] !== 'mine') {
+        grid[idx] = 'mine';
+        placedMines++;
+      }
+    }
+
+    activeMinesGames[name] = {
+      playerName: name,
+      betAmount: bet,
+      minesCount: mCount,
+      grid,
+      revealed: Array(25).fill(false),
+      multiplier: 1.0,
+      isGameOver: false,
+      isWin: false
+    };
+
+    saveData();
+
+    res.json({
+      success: true,
+      betAmount: bet,
+      minesCount: mCount,
+      multiplier: 1.0,
+      revealed: activeMinesGames[name].revealed,
+      newPoints: farmer.points,
+      message: `Mines game started with a bet of ${bet} AP!`
+    });
+  });
+
+  app.post('/api/game/bet/mines/reveal', (req, res) => {
+    const { name, tileIndex } = req.body;
+    if (!name || tileIndex === undefined) {
+      return res.status(400).json({ error: 'Missing name or tileIndex parameters.' });
+    }
+
+    const game = activeMinesGames[name];
+    if (!game || game.isGameOver) {
+      return res.status(400).json({ error: 'No active Mines game found for this player.' });
+    }
+
+    const idx = Math.floor(Number(tileIndex));
+    if (isNaN(idx) || idx < 0 || idx > 24) {
+      return res.status(400).json({ error: 'Invalid tile index.' });
+    }
+
+    if (game.revealed[idx]) {
+      return res.status(400).json({ error: 'Tile already revealed.' });
+    }
+
+    game.revealed[idx] = true;
+
+    // Check hit
+    if (game.grid[idx] === 'mine') {
+      game.isGameOver = true;
+      game.isWin = false;
+      const finalGrid = game.grid;
+      delete activeMinesGames[name];
+      saveData();
+      return res.json({
+        success: true,
+        mineHit: true,
+        message: '💥 BOOM! You hit a mine and lost your bet!',
+        grid: finalGrid
+      });
+    }
+
+    // Found gem
+    const revealedCount = game.revealed.filter(Boolean).length;
+    const gemsCount = 25 - game.minesCount;
+    game.multiplier = calculateMinesMultiplier(game.minesCount, revealedCount);
+
+    // If all gems found, automatic cashout
+    if (revealedCount === gemsCount) {
+      game.isGameOver = true;
+      game.isWin = true;
+      const today = new Date().toISOString().split('T')[0];
+      const earnedToday = dailyBetEarnings[name][today] || 0;
+      
+      let payout = Math.floor(game.betAmount * game.multiplier);
+      let netGain = payout - game.betAmount;
+      if (earnedToday + netGain > 5000) {
+        netGain = 5000 - earnedToday;
+        payout = game.betAmount + netGain;
+      }
+      
+      dailyBetEarnings[name][today] = earnedToday + netGain;
+      
+      const farmer = farmers[name];
+      farmer.points += payout;
+      
+      recordGamePlayed(name, 'mines');
+      const finalGrid = game.grid;
+      delete activeMinesGames[name];
+      saveData();
+
+      return res.json({
+        success: true,
+        mineHit: false,
+        cashout: true,
+        multiplier: game.multiplier,
+        payout,
+        netGain,
+        newPoints: farmer.points,
+        message: `🎉 Maximum Gems Found! You win ${payout} AP (${game.multiplier}x multiplier)!`,
+        grid: finalGrid
+      });
+    }
+
+    res.json({
+      success: true,
+      mineHit: false,
+      multiplier: game.multiplier,
+      revealed: game.revealed,
+      nextMultiplier: calculateMinesMultiplier(game.minesCount, revealedCount + 1),
+      message: '💎 Diamond found! Multiplier increased.'
+    });
+  });
+
+  app.post('/api/game/bet/mines/cashout', (req, res) => {
+    const { name } = req.body;
+    if (!name) {
+      return res.status(400).json({ error: 'Missing name parameter.' });
+    }
+
+    const game = activeMinesGames[name];
+    if (!game || game.isGameOver) {
+      return res.status(400).json({ error: 'No active Mines game found to cash out.' });
+    }
+
+    const revealedCount = game.revealed.filter(Boolean).length;
+    if (revealedCount === 0) {
+      return res.status(400).json({ error: 'You must reveal at least one diamond to cash out.' });
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    const earnedToday = dailyBetEarnings[name][today] || 0;
+
+    let payout = Math.floor(game.betAmount * game.multiplier);
+    let netGain = payout - game.betAmount;
+
+    if (earnedToday + netGain > 5000) {
+      netGain = 5000 - earnedToday;
+      payout = game.betAmount + netGain;
+    }
+
+    dailyBetEarnings[name][today] = earnedToday + netGain;
+
+    const farmer = farmers[name];
+    farmer.points += payout;
+
+    recordGamePlayed(name, 'mines');
+    const finalGrid = game.grid;
+    delete activeMinesGames[name];
+    saveData();
+
+    logActivity(
+      '🎰 Mines Game Cashout',
+      `**${name}** cashed out at **${game.multiplier}x** in Mines! Gained **+${netGain} AP** net (Total: **${farmer.points.toLocaleString()} AP** 💰).`,
+      3066993
+    );
+
+    res.json({
+      success: true,
+      multiplier: game.multiplier,
+      payout,
+      netGain,
+      newPoints: farmer.points,
+      message: `🎉 Successfully cashed out ${payout} AP at ${game.multiplier}x multiplier!`,
+      grid: finalGrid
     });
   });
 
@@ -2319,10 +2767,11 @@ async function startServer() {
 
   // --- DISCORD OAUTH ENDPOINTS ---
   app.get('/api/auth/discord/config', (req, res) => {
+    const appUrl = process.env.APP_URL || 'http://localhost:3000';
     res.json({
       configured: !!(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET),
-      devUrl: 'https://ais-dev-mi5isjwmxcwzz2wnkckp6y-950813206559.asia-east1.run.app',
-      sharedUrl: 'https://ais-pre-mi5isjwmxcwzz2wnkckp6y-950813206559.asia-east1.run.app'
+      devUrl: appUrl,
+      sharedUrl: appUrl
     });
   });
 
@@ -3237,6 +3686,71 @@ Guidelines for your responses:
     });
   });
 
+  // BOT API: SET USER AFK
+  app.post('/api/discord-bot/afk/set', verifyBotSecret, (req, res) => {
+    const { discordId, username, reason, avatarUrl } = req.body;
+    if (!discordId || !username) {
+      return res.status(400).json({ error: 'discordId and username are required.' });
+    }
+
+    const farmer = getOrCreateFarmerByDiscord(discordId, username);
+    farmer.isAfk = true;
+    farmer.afkSince = Date.now();
+    farmer.afkReason = reason || 'No reason specified';
+    if (avatarUrl) {
+      farmer.avatarUrl = avatarUrl;
+    }
+    
+    saveData();
+    res.json({ success: true, farmer });
+  });
+
+  // BOT API: CLEAR USER AFK
+  app.post('/api/discord-bot/afk/clear', verifyBotSecret, (req, res) => {
+    const { discordId } = req.body;
+    if (!discordId) {
+      return res.status(400).json({ error: 'discordId is required.' });
+    }
+
+    const farmer = findFarmerByDiscordId(discordId);
+    if (farmer && farmer.isAfk) {
+      const duration = Date.now() - (farmer.afkSince || Date.now());
+      const oldReason = farmer.afkReason;
+      
+      farmer.isAfk = false;
+      farmer.afkReason = undefined;
+      farmer.afkSince = undefined;
+      
+      saveData();
+      return res.json({ success: true, cleared: true, duration, reason: oldReason, name: farmer.name });
+    }
+
+    res.json({ success: true, cleared: false });
+  });
+
+  // BOT API: CHECK MENTIONS AFK
+  app.post('/api/discord-bot/afk/check-mentions', verifyBotSecret, (req, res) => {
+    const { mentions } = req.body;
+    if (!Array.isArray(mentions)) {
+      return res.status(400).json({ error: 'mentions must be an array of discord IDs.' });
+    }
+
+    const afkUsers: Array<{ name: string; reason: string; afkSince: number; duration: number }> = [];
+    mentions.forEach((id: string) => {
+      const farmer = findFarmerByDiscordId(id);
+      if (farmer && farmer.isAfk) {
+        afkUsers.push({
+          name: farmer.name,
+          reason: farmer.afkReason || 'No reason specified',
+          afkSince: farmer.afkSince || Date.now(),
+          duration: Date.now() - (farmer.afkSince || Date.now())
+        });
+      }
+    });
+
+    res.json({ afkUsers });
+  });
+
   // DIRECT DISCORD INTERACTIONS WEBHOOK ENDPOINT
   app.post('/api/discord/interactions', (req: any, res) => {
     const signature = req.headers['x-signature-ed25519'] as string;
@@ -3522,36 +4036,15 @@ Guidelines for your responses:
       return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
     }
     try {
-      const payload = {
-        farmers,
-        lastDailyClaims,
-        customRoles,
-        redeemCodes,
-        presetRolePurchases,
-        dailyTransfers,
-        dailyBetEarnings,
-        auditReports,
-        lastAuditTimestamp,
-        discordBotSecret
-      };
-
-      const jsonStr = JSON.stringify({
-        type: 'AURLETS_WEBSITE_BACKUP',
-        version: 1,
-        exportedAt: Date.now(),
-        data: payload
-      });
-
-      // Encode into Base64 format to make it a special format backup file
-      const base64Data = Buffer.from(jsonStr, 'utf-8').toString('base64');
-      const backupContent = `AURLETS-BACKUP-V1:${base64Data}`;
+      const backup = createBackupPayload("Exported Progress File");
+      addBackupToHistory(backup);
 
       const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '_');
       const filename = `aurlets_progress_${dateStr}.aurlets`;
 
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
-      res.send(backupContent);
+      res.send(backup.fileContent);
     } catch (err: any) {
       res.status(500).json({ error: err.message || 'Failed to generate backup file.' });
     }
@@ -3579,6 +4072,9 @@ Guidelines for your responses:
         return res.status(400).json({ error: 'Invalid backup signature or data schema.' });
       }
 
+      // Auto-save current progress to history before importing
+      addBackupToHistory(createBackupPayload("Auto-save before Import"));
+
       const backupData = parsed.data;
 
       // Update in-memory state
@@ -3592,6 +4088,11 @@ Guidelines for your responses:
       if (backupData.auditReports) auditReports = backupData.auditReports;
       if (backupData.lastAuditTimestamp) lastAuditTimestamp = backupData.lastAuditTimestamp;
       if (backupData.discordBotSecret) discordBotSecret = backupData.discordBotSecret;
+      if (backupData.puzzleImages) puzzleImages = backupData.puzzleImages;
+      if (backupData.giveaways) giveaways = backupData.giveaways;
+      if (backupData.kotdRewardsEnabled !== undefined) {
+        kotdRewardsEnabled = backupData.kotdRewardsEnabled;
+      }
 
       // Persist to local disk
       saveData();
@@ -3603,12 +4104,403 @@ Guidelines for your responses:
           usersCount: Object.keys(farmers).length,
           customRolesCount: customRoles.length,
           redeemCodesCount: Object.keys(redeemCodes).length,
+          puzzleImagesCount: (puzzleImages || []).length,
+          giveawaysCount: (giveaways || []).length,
           exportedAt: parsed.exportedAt
         }
       });
     } catch (err: any) {
       res.status(400).json({ error: `Failed to restore backup: ${err.message || err}` });
     }
+  });
+
+  // GET backups history
+  app.get('/api/admin/backups/history', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const sanitizedHistory = backupsHistory.map(b => ({
+      id: b.id,
+      timestamp: b.timestamp,
+      trigger: b.trigger,
+      stats: b.stats
+    }));
+    res.json({ history: sanitizedHistory });
+  });
+
+  // GET admin settings
+  app.get('/api/admin/settings', (req, res) => {
+    res.json({ kotdRewardsEnabled });
+  });
+
+  // POST admin settings
+  app.post('/api/admin/settings', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { kotdRewardsEnabled: newSetting } = req.body;
+    if (newSetting !== undefined) {
+      kotdRewardsEnabled = !!newSetting;
+      saveData();
+    }
+    res.json({ success: true, kotdRewardsEnabled });
+  });
+
+  // ==========================================
+  // MAINTENANCE MODE ENDPOINTS
+  // ==========================================
+  // GET public maintenance status
+  app.get('/api/maintenance/status', (req, res) => {
+    res.json(maintenanceMode);
+  });
+
+  // POST admin update maintenance status
+  app.post('/api/admin/maintenance', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { enabled, fullWebsite, categories } = req.body;
+    if (enabled !== undefined) maintenanceMode.enabled = !!enabled;
+    if (fullWebsite !== undefined) maintenanceMode.fullWebsite = !!fullWebsite;
+    if (categories !== undefined && Array.isArray(categories)) {
+      maintenanceMode.categories = categories;
+    }
+    saveData();
+    res.json({ success: true, maintenanceMode });
+  });
+
+  // ==========================================
+  // SPIN THE WHEEL GAME ENDPOINTS
+  // ==========================================
+  // GET spin game state
+  app.get('/api/games/spin/state', (req, res) => {
+    const userDiscordId = req.query.discordId as string || '';
+    const isAdmin = isRequestAdmin(req);
+    
+    if (!spinGame.visibleToPublic && !isAdmin) {
+      return res.status(403).json({ error: 'This live spin game is currently private (admin-only).' });
+    }
+    
+    res.json({
+      spinGame,
+      isAdmin,
+      isAllowedToSpin: isAdmin || spinGame.allowedDiscordIds.includes(userDiscordId)
+    });
+  });
+
+  // POST update spin game config (Admin only)
+  app.post('/api/admin/games/spin/config', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { visibleToPublic, allowedDiscordIds, segments } = req.body;
+    if (visibleToPublic !== undefined) spinGame.visibleToPublic = !!visibleToPublic;
+    if (allowedDiscordIds !== undefined) {
+      spinGame.allowedDiscordIds = Array.isArray(allowedDiscordIds)
+        ? allowedDiscordIds
+        : typeof allowedDiscordIds === 'string'
+          ? allowedDiscordIds.split(',').map(s => s.trim()).filter(Boolean)
+          : [];
+    }
+    if (segments !== undefined && Array.isArray(segments)) {
+      spinGame.segments = segments;
+    }
+    saveData();
+    res.json({ success: true, spinGame });
+  });
+
+  // POST trigger spin the wheel
+  app.post('/api/games/spin/trigger', (req, res) => {
+    const userDiscordId = req.body.discordId as string || '';
+    const username = req.body.username as string || '';
+    const isAdmin = isRequestAdmin(req);
+    const isAllowed = isAdmin || spinGame.allowedDiscordIds.includes(userDiscordId);
+    
+    if (!isAllowed) {
+      return res.status(403).json({ error: 'You are not authorized to spin this wheel.' });
+    }
+    
+    if (spinGame.segments.length === 0) {
+      return res.status(400).json({ error: 'No segments configured on the wheel.' });
+    }
+    
+    const segmentIndex = Math.floor(Math.random() * spinGame.segments.length);
+    const segment = spinGame.segments[segmentIndex];
+    let spinUser = username || (isAdmin ? 'Admin' : 'Whitelisted User');
+    let rewardApplied = 0;
+    
+    if (spinUser && spinUser !== 'Admin' && spinUser !== 'Whitelisted User') {
+      let farmer = farmers[spinUser];
+      if (!farmer) {
+        farmers[spinUser] = {
+          name: spinUser,
+          points: 100,
+          avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+          lastActive: Date.now(),
+          streak: 0,
+          timeOnWebsite: 0,
+          invites: 0
+        };
+        farmer = farmers[spinUser];
+      }
+      
+      if (segment.type === 'win') {
+        farmer.points += segment.value;
+        rewardApplied = segment.value;
+      } else if (segment.type === 'lose') {
+        if (segment.value === -99999) {
+          rewardApplied = -farmer.points;
+          farmer.points = 0;
+        } else {
+          const deduct = Math.min(farmer.points, Math.abs(segment.value));
+          farmer.points -= deduct;
+          rewardApplied = -deduct;
+        }
+      }
+    }
+    
+    spinGame.lastSpinResult = {
+      segmentIndex,
+      winnerName: spinUser,
+      winnerId: userDiscordId || undefined,
+      timestamp: Date.now(),
+      isLive: true
+    };
+    
+    saveData();
+    res.json({
+      success: true,
+      segmentIndex,
+      segment,
+      winnerName: spinUser,
+      rewardApplied,
+      spinGame
+    });
+  });
+
+  // ==========================================
+  // ELIMINATION SPIN GAME ENDPOINTS
+  // ==========================================
+  // GET elimination game state
+  app.get('/api/games/elimination/state', (req, res) => {
+    res.json({ eliminationGame });
+  });
+
+  // POST setup elimination game (Admin only)
+  app.post('/api/admin/games/elimination/setup', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { prize, participants } = req.body;
+    if (!prize) {
+      return res.status(400).json({ error: 'Prize is required.' });
+    }
+    if (!participants || !Array.isArray(participants) || participants.length < 2) {
+      return res.status(400).json({ error: 'At least 2 participants are required for an elimination wheel.' });
+    }
+    
+    eliminationGame = {
+      prize,
+      participants: participants.map((p: any) => ({
+        discordId: String(p.discordId || '').trim(),
+        name: String(p.name || '').trim()
+      })),
+      remainingParticipants: participants.map((p: any) => ({
+        discordId: String(p.discordId || '').trim(),
+        name: String(p.name || '').trim()
+      })),
+      lastEliminated: null,
+      winner: null,
+      isFinished: false,
+      history: [`Game initialized with ${participants.length} participants for prize: ${prize}.`]
+    };
+    
+    saveData();
+    res.json({ success: true, eliminationGame });
+  });
+
+  // POST spin elimination game (Admin only)
+  app.post('/api/admin/games/elimination/spin', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    
+    if (eliminationGame.isFinished || eliminationGame.remainingParticipants.length <= 1) {
+      return res.status(400).json({ error: 'No active elimination game, or game is already finished!' });
+    }
+    
+    const remainingCount = eliminationGame.remainingParticipants.length;
+    const eliminateIndex = Math.floor(Math.random() * remainingCount);
+    const eliminatedUser = eliminationGame.remainingParticipants[eliminateIndex];
+    
+    eliminationGame.remainingParticipants.splice(eliminateIndex, 1);
+    eliminationGame.lastEliminated = eliminatedUser;
+    
+    let winner = null;
+    let isFinished = false;
+    let historyMsg = `🎯 Spin: **${eliminatedUser.name}** was eliminated!`;
+    
+    if (eliminationGame.remainingParticipants.length === 1) {
+      winner = eliminationGame.remainingParticipants[0];
+      eliminationGame.winner = winner;
+      eliminationGame.isFinished = true;
+      isFinished = true;
+      historyMsg += ` 🏆 **${winner.name}** is the last person standing and WINS the **${eliminationGame.prize}**!`;
+      
+      const apMatch = eliminationGame.prize.match(/(\d+)\s*AP/i);
+      if (apMatch && winner.name) {
+        const pointsAwarded = parseInt(apMatch[1]);
+        let farmer = farmers[winner.name];
+        if (!farmer) {
+          farmers[winner.name] = {
+            name: winner.name,
+            points: 0,
+            avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+            lastActive: Date.now(),
+            streak: 0,
+            timeOnWebsite: 0,
+            invites: 0
+          };
+          farmer = farmers[winner.name];
+        }
+        farmer.points += pointsAwarded;
+        historyMsg += ` Automatically credited **${pointsAwarded} AP** to their account.`;
+      }
+    }
+    
+    eliminationGame.history.push(historyMsg);
+    saveData();
+    
+    res.json({
+      success: true,
+      eliminatedUser,
+      winner,
+      isFinished,
+      eliminationGame
+    });
+  });
+
+  // POST reset elimination game (Admin only)
+  app.post('/api/admin/games/elimination/reset', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    eliminationGame = {
+      prize: '1000 AP',
+      participants: [],
+      remainingParticipants: [],
+      lastEliminated: null,
+      winner: null,
+      isFinished: false,
+      history: []
+    };
+    saveData();
+    res.json({ success: true, eliminationGame });
+  });
+
+  // POST create backup point
+  app.post('/api/admin/backups/create', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    try {
+      const backup = createBackupPayload("Manual Backup Point");
+      addBackupToHistory(backup);
+      res.json({ success: true, message: 'Backup point successfully created!' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to create backup point.' });
+    }
+  });
+
+  // POST restore backup point
+  app.post('/api/admin/backups/restore', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing backup ID.' });
+    }
+
+    const backup = backupsHistory.find(b => b.id === id);
+    if (!backup) {
+      return res.status(404).json({ error: 'Backup point not found.' });
+    }
+
+    try {
+      if (!backup.fileContent.startsWith('AURLETS-BACKUP-V1:')) {
+        return res.status(400).json({ error: 'Invalid backup file format.' });
+      }
+
+      // Auto-save before restoring
+      addBackupToHistory(createBackupPayload(`Auto-save before restoring "${backup.trigger}"`));
+
+      const base64Data = backup.fileContent.substring('AURLETS-BACKUP-V1:'.length).trim();
+      const decodedStr = Buffer.from(base64Data, 'base64').toString('utf-8');
+      const parsed = JSON.parse(decodedStr);
+
+      if (parsed.type !== 'AURLETS_WEBSITE_BACKUP' || !parsed.data) {
+        return res.status(400).json({ error: 'Invalid backup data schema.' });
+      }
+
+      const backupData = parsed.data;
+
+      // Update in-memory state
+      if (backupData.farmers) farmers = backupData.farmers;
+      if (backupData.lastDailyClaims) lastDailyClaims = backupData.lastDailyClaims;
+      if (backupData.customRoles) customRoles = backupData.customRoles;
+      if (backupData.redeemCodes) redeemCodes = backupData.redeemCodes;
+      if (backupData.presetRolePurchases) presetRolePurchases = backupData.presetRolePurchases;
+      if (backupData.dailyTransfers) dailyTransfers = backupData.dailyTransfers;
+      if (backupData.dailyBetEarnings) dailyBetEarnings = backupData.dailyBetEarnings;
+      if (backupData.auditReports) auditReports = backupData.auditReports;
+      if (backupData.lastAuditTimestamp) lastAuditTimestamp = backupData.lastAuditTimestamp;
+      if (backupData.discordBotSecret) discordBotSecret = backupData.discordBotSecret;
+      if (backupData.puzzleImages) puzzleImages = backupData.puzzleImages;
+      if (backupData.giveaways) giveaways = backupData.giveaways;
+      if (backupData.kotdRewardsEnabled !== undefined) {
+        kotdRewardsEnabled = backupData.kotdRewardsEnabled;
+      }
+
+      // Persist to local disk
+      saveData();
+
+      res.json({
+        success: true,
+        message: `Successfully restored backup from "${backup.trigger}"!`,
+        stats: {
+          usersCount: Object.keys(farmers).length,
+          customRolesCount: customRoles.length,
+          redeemCodesCount: Object.keys(redeemCodes).length,
+          puzzleImagesCount: (puzzleImages || []).length,
+          giveawaysCount: (giveaways || []).length,
+          exportedAt: parsed.exportedAt
+        }
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: `Failed to restore backup point: ${err.message || err}` });
+    }
+  });
+
+  // DELETE a backup point
+  app.delete('/api/admin/backups/delete', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ error: 'Missing backup ID.' });
+    }
+
+    const index = backupsHistory.findIndex(b => b.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: 'Backup point not found.' });
+    }
+
+    backupsHistory.splice(index, 1);
+    saveBackupsHistory();
+
+    res.json({ success: true, message: 'Backup point deleted from history.' });
   });
 
   // --- VITE DEV SERVER OR STATIC SERVING ---
@@ -3625,9 +4517,9 @@ Guidelines for your responses:
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
-console.log("PORT =", process.env.PORT);
+
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://fi6.bot-hosting.net:${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 

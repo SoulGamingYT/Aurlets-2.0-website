@@ -58,6 +58,9 @@ interface Farmer {
   gamesPlayed?: Record<string, number>;
   totalGamesPlayed?: number;
   discordMessagesCount?: number;
+  isAfk?: boolean;
+  afkSince?: number;
+  afkReason?: string;
 }
 
 interface Giveaway {
@@ -354,6 +357,18 @@ export function startDiscordBot(
 
     // Register Giveaway Slash Commands
     const commands = [
+      {
+        name: 'afk',
+        description: 'Set your AFK status with an optional reason',
+        options: [
+          {
+            name: 'reason',
+            description: 'Why you are going AFK',
+            type: 3,
+            required: false
+          }
+        ]
+      },
       {
         name: 'giveaway',
         description: 'Manage and participate in giveaways',
@@ -813,11 +828,93 @@ export function startDiscordBot(
         );
       }
     }
+
+    if (commandName === 'afk') {
+      const reason = options.getString('reason') || 'No reason specified';
+      const authorId = user.id;
+      const authorTag = user.username;
+      const avatarUrl = user.displayAvatarURL() || undefined;
+
+      const farmer = getOrCreateFarmerByDiscord(authorId, authorTag);
+      farmer.isAfk = true;
+      farmer.afkSince = Date.now();
+      farmer.afkReason = reason;
+      if (avatarUrl) {
+        farmer.avatarUrl = avatarUrl;
+      }
+      saveData();
+
+      const embed = new EmbedBuilder()
+        .setTitle('💤 AFK Status Set')
+        .setDescription(`**${authorTag}** is now AFK: **${reason}**`)
+        .setColor(3447003)
+        .setTimestamp()
+        .setFooter({ text: 'Aurlets Economy System', iconURL: client.user?.displayAvatarURL() });
+
+      await interaction.reply({ embeds: [embed] });
+    }
   });
 
   client.on('messageCreate', async (message: Message) => {
     // Ignore bots and webhooks
     if (message.author.bot) return;
+
+    // 1. Auto-clear AFK status for message sender
+    const senderFarmer = findFarmerByDiscordId(message.author.id);
+    if (senderFarmer && senderFarmer.isAfk) {
+      const durationMs = Date.now() - (senderFarmer.afkSince || Date.now());
+      const seconds = Math.floor(durationMs / 1000) % 60;
+      const minutes = Math.floor(durationMs / (1000 * 60)) % 60;
+      const hours = Math.floor(durationMs / (1000 * 60 * 60)) % 24;
+      const days = Math.floor(durationMs / (1000 * 60 * 60 * 24));
+      
+      let durationStr = '';
+      if (days > 0) durationStr += `${days}d `;
+      if (hours > 0) durationStr += `${hours}h `;
+      if (minutes > 0) durationStr += `${minutes}m `;
+      durationStr += `${seconds}s`;
+
+      senderFarmer.isAfk = false;
+      senderFarmer.afkReason = undefined;
+      senderFarmer.afkSince = undefined;
+      saveData();
+
+      const welcomeEmbed = new EmbedBuilder()
+        .setTitle('👋 Welcome Back!')
+        .setDescription(`**${message.author.username}**, I have removed your AFK status. You were AFK for **${durationStr}**.`)
+        .setColor(3066993)
+        .setTimestamp();
+      
+      await message.reply({ embeds: [welcomeEmbed] });
+    }
+
+    // 2. Check for mentions of AFK users
+    if (message.mentions.users.size > 0) {
+      for (const [mentionedId, mentionedUser] of message.mentions.users) {
+        const mentionedFarmer = findFarmerByDiscordId(mentionedId);
+        if (mentionedFarmer && mentionedFarmer.isAfk) {
+          const durationMs = Date.now() - (mentionedFarmer.afkSince || Date.now());
+          const seconds = Math.floor(durationMs / 1000) % 60;
+          const minutes = Math.floor(durationMs / (1000 * 60)) % 60;
+          const hours = Math.floor(durationMs / (1000 * 60 * 60)) % 24;
+          const days = Math.floor(durationMs / (1000 * 60 * 60 * 24));
+          
+          let durationStr = '';
+          if (days > 0) durationStr += `${days}d `;
+          if (hours > 0) durationStr += `${hours}h `;
+          if (minutes > 0) durationStr += `${minutes}m `;
+          durationStr += `${seconds}s`;
+
+          const afkEmbed = new EmbedBuilder()
+            .setTitle('💤 User is AFK')
+            .setDescription(`**${mentionedUser.username}** is currently AFK: **${mentionedFarmer.afkReason || 'No reason specified'}**\n*(AFK for ${durationStr})*`)
+            .setColor(15158332)
+            .setTimestamp();
+          
+          await message.reply({ embeds: [afkEmbed] });
+        }
+      }
+    }
 
     // Award activity points for messages in guild 1392526036520009779
     if (message.guild && message.guild.id === '1392526036520009779') {
@@ -860,6 +957,7 @@ export function startDiscordBot(
       'help', 'commands',
       'bal', 'balance',
       'profile',
+      'afk',
       'daily',
       'beg',
       'work',
@@ -995,6 +1093,30 @@ export function startDiscordBot(
         `• \`+reset <@user>\` - Reset a user's points & streak to 0 (Admin Only).\n` +
         `• \`+purge <quantity>\` / \`+purge <@user/humans/bots> <quantity>\` - Delete messages from a channel (Manage Messages permission required).`;
       return sendEmbed('📋 Aurlets Economy Bot Instructions', description, 3447003);
+    }
+
+    // ==========================================
+    // AFK COMMAND (+afk [reason])
+    // ==========================================
+    if (commandName === 'afk') {
+      const reason = args.join(' ') || 'No reason specified';
+      farmer.isAfk = true;
+      farmer.afkSince = Date.now();
+      farmer.afkReason = reason;
+      const avatarUrl = message.author.displayAvatarURL() || undefined;
+      if (avatarUrl) {
+        farmer.avatarUrl = avatarUrl;
+      }
+      saveData();
+
+      const embed = new EmbedBuilder()
+        .setTitle('💤 AFK Status Set')
+        .setDescription(`**${message.author.username}** is now AFK: **${reason}**`)
+        .setColor(3447003)
+        .setTimestamp()
+        .setFooter({ text: 'Aurlets Economy System', iconURL: client.user?.displayAvatarURL() });
+
+      return message.reply({ embeds: [embed] });
     }
 
     // ==========================================
@@ -2004,7 +2126,7 @@ export function startDiscordBot(
     // 13. CUSTOM ROLE COMMAND
     // ==========================================
     if (commandName === 'customrole' || commandName === 'cr' || commandName === 'custom') {
-      const webLink = process.env.APP_URL || 'https://ais-pre-mi5isjwmxcwzz2wnkckp6y-950813206559.asia-east1.run.app';
+      const webLink = process.env.APP_URL || 'http://localhost:3000';
       const desc = `🎭 **Create Your Own Custom Discord Role!**\n\n` +
         `You can buy and configure a unique premium role that is fully custom to you!\n\n` +
         `✨ **Customization Mechanics:**\n` +
@@ -2065,7 +2187,7 @@ export function startDiscordBot(
     // 14.5 WEBSITE COMMAND
     // ==========================================
     if (commandName === 'website' || commandName === 'web' || commandName === 'site') {
-      const webLink = process.env.APP_URL || 'https://ais-pre-mi5isjwmxcwzz2wnkckp6y-950813206559.asia-east1.run.app';
+      const webLink = process.env.APP_URL || 'http://localhost:3000';
       const desc = `🌐 **Welcome to Aurlets!**\n\n` +
         `Visit our official website to save progress, check detailed stats, play games, and customize your premium rewards!\n\n` +
         `✨ **Website Features:**\n` +

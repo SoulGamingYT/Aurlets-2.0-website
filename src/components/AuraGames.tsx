@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw, AlertCircle, Heart, Coins, Sparkles, ArrowLeft, RotateCw, Landmark, Grid, LayoutGrid, Link2 } from 'lucide-react';
 import { Tooltip } from './Tooltip';
 import SlidePuzzle from './SlidePuzzle';
+import SpinWheelArena from './SpinWheelArena';
 
 interface GameLog {
   id: string;
@@ -24,6 +25,8 @@ interface AuraGamesProps {
   points?: number;
   setPoints?: React.Dispatch<React.SetStateAction<number>>;
   showNotice?: (msg: string, type: 'success' | 'error' | 'info') => void;
+  isAdmin?: boolean;
+  userDiscordId?: string;
 }
 
 export default function AuraGames({ 
@@ -32,7 +35,9 @@ export default function AuraGames({
   onOpenAuthModal,
   points = 0,
   setPoints,
-  showNotice
+  showNotice,
+  isAdmin = false,
+  userDiscordId = ''
 }: AuraGamesProps) {
   const [playerId] = useState(() => {
     let id = localStorage.getItem('aurlets_player_id');
@@ -54,7 +59,7 @@ export default function AuraGames({
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'spin' | null>(null);
 
   // Rules visibility states
   const [showMathRules, setShowMathRules] = useState<boolean>(false);
@@ -69,8 +74,19 @@ export default function AuraGames({
   const [coinResult, setCoinResult] = useState<'heads' | 'tails' | null>(null);
   const [slotReels, setSlotReels] = useState<string[]>(['🍒', '🍋', '🍇']);
   const [slotsRolling, setSlotsRolling] = useState<boolean>(false);
-  const [activeCasinoTab, setActiveCasinoTab] = useState<'coinflip' | 'slots'>('coinflip');
+  const [activeCasinoTab, setActiveCasinoTab] = useState<'coinflip' | 'slots' | 'mines'>('coinflip');
   const [lastWinMessage, setLastWinMessage] = useState<string | null>(null);
+
+  // --- MINES CASINO GAME STATE ---
+  const [minesBet, setMinesBet] = useState<string>('10');
+  const [minesCount, setMinesCount] = useState<number>(3);
+  const [minesActive, setMinesActive] = useState<boolean>(false);
+  const [minesRevealed, setMinesRevealed] = useState<boolean[]>(Array(25).fill(false));
+  const [minesGrid, setMinesGrid] = useState<('gem' | 'mine' | null)[]>(Array(25).fill(null));
+  const [minesMultiplier, setMinesMultiplier] = useState<number>(1.0);
+  const [minesNextMultiplier, setMinesNextMultiplier] = useState<number>(1.13);
+  const [minesLoading, setMinesLoading] = useState<boolean>(false);
+  const [minesResultMsg, setMinesResultMsg] = useState<string | null>(null);
 
   // --- MATHS GAME STATE ---
   const [mathPlaying, setMathPlaying] = useState<boolean>(false);
@@ -91,6 +107,35 @@ export default function AuraGames({
   const [kotdPlayers, setKotdPlayers] = useState<any[]>([]);
   const [kotdLogs, setKotdLogs] = useState<GameLog[]>([]);
   const [kotdRound, setKotdRound] = useState<number>(1);
+
+  // Spin Game Visibility State
+  const [spinGameVisible, setSpinGameVisible] = useState<boolean>(isAdmin);
+
+  useEffect(() => {
+    const checkSpinVisibility = async () => {
+      try {
+        const headers: Record<string, string> = {};
+        if (isAdmin) {
+          headers['x-admin-discord-id'] = userDiscordId;
+          headers['x-admin-username'] = playerName;
+        }
+        const res = await fetch(`/api/games/spin/state?discordId=${encodeURIComponent(userDiscordId)}`, {
+          headers
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setSpinGameVisible(data.spinGame.visibleToPublic || data.isAdmin || data.isAllowedToSpin || isAdmin);
+        } else if (isAdmin) {
+          setSpinGameVisible(true);
+        }
+      } catch {
+        if (isAdmin) setSpinGameVisible(true);
+      }
+    };
+    checkSpinVisibility();
+    const interval = setInterval(checkSpinVisibility, 10000);
+    return () => clearInterval(interval);
+  }, [userDiscordId, isAdmin, playerName]);
 
   // Synchronize playerName with localStorage changes
   useEffect(() => {
@@ -423,6 +468,182 @@ export default function AuraGames({
     }
   };
 
+  // --- MINES CASINO GAME HANDLERS ---
+  const startMinesGame = async () => {
+    if (!isLoggedIn) {
+      showNotice?.('Please set your nickname/profile before starting a game!', 'error');
+      return;
+    }
+    const bet = Math.floor(Number(minesBet));
+    if (isNaN(bet) || bet < 5) {
+      showNotice?.('Minimum bet is 5 Aura Points (AP).', 'error');
+      return;
+    }
+    if (points < bet) {
+      showNotice?.(`Insufficient points! You only have ${points} AP.`, 'error');
+      return;
+    }
+    if (minesCount < 1 || minesCount > 24) {
+      showNotice?.('Mines count must be between 1 and 24.', 'error');
+      return;
+    }
+
+    setMinesLoading(true);
+    setMinesResultMsg(null);
+
+    try {
+      const res = await fetch('/api/game/bet/mines/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName, betAmount: bet, minesCount })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to start Mines game.');
+      }
+
+      setMinesActive(true);
+      setMinesRevealed(Array(25).fill(false));
+      setMinesGrid(Array(25).fill(null));
+      setMinesMultiplier(1.0);
+      setMinesNextMultiplier(data.nextMultiplier || 1.13);
+      setPoints?.(data.newPoints);
+      showNotice?.(data.message, 'success');
+    } catch (err: any) {
+      showNotice?.(err.message || 'Error starting Mines game.', 'error');
+    } finally {
+      setMinesLoading(false);
+    }
+  };
+
+  const revealMinesTile = async (idx: number) => {
+    if (!minesActive || minesLoading || minesRevealed[idx]) return;
+
+    setMinesLoading(true);
+    try {
+      const res = await fetch('/api/game/bet/mines/reveal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName, tileIndex: idx })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to reveal tile.');
+      }
+
+      if (data.mineHit) {
+        // Lost!
+        setMinesActive(false);
+        setMinesResultMsg('💣 Hit a mine! Game Over.');
+        
+        // Populate full grid to reveal everything
+        const newGrid = data.grid.map((val: string) => val);
+        setMinesGrid(newGrid);
+        setMinesRevealed(Array(25).fill(true));
+        showNotice?.(data.message, 'error');
+
+        setBetHistory(prev => [
+          {
+            id: 'b_' + Math.random().toString(36).substring(2, 11),
+            game: `Mines 💣 (${minesCount} Mines)`,
+            bet: Math.floor(Number(minesBet)),
+            result: 'Lost (Hit Mine)',
+            payout: 0,
+            won: false,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          },
+          ...prev
+        ]);
+      } else if (data.cashout) {
+        // Automatic cashout (found all gems!)
+        setMinesActive(false);
+        setMinesResultMsg(`🎉 Max Gems Found! Won ${data.payout} AP!`);
+        setMinesMultiplier(data.multiplier);
+        setPoints?.(data.newPoints);
+
+        const newGrid = data.grid.map((val: string) => val);
+        setMinesGrid(newGrid);
+        setMinesRevealed(Array(25).fill(true));
+        showNotice?.(data.message, 'success');
+
+        setBetHistory(prev => [
+          {
+            id: 'b_' + Math.random().toString(36).substring(2, 11),
+            game: `Mines 💣 (${minesCount} Mines)`,
+            bet: Math.floor(Number(minesBet)),
+            result: `Cleared! (${data.multiplier}x)`,
+            payout: data.payout,
+            won: true,
+            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+          },
+          ...prev
+        ]);
+      } else {
+        // Gem found!
+        const newRevealed = [...minesRevealed];
+        newRevealed[idx] = true;
+        setMinesRevealed(newRevealed);
+
+        const newGrid = [...minesGrid];
+        newGrid[idx] = 'gem';
+        setMinesGrid(newGrid);
+
+        setMinesMultiplier(data.multiplier);
+        if (data.nextMultiplier) {
+          setMinesNextMultiplier(data.nextMultiplier);
+        }
+        showNotice?.(data.message, 'success');
+      }
+    } catch (err: any) {
+      showNotice?.(err.message || 'Error revealing tile.', 'error');
+    } finally {
+      setMinesLoading(false);
+    }
+  };
+
+  const cashoutMinesGame = async () => {
+    if (!minesActive || minesLoading) return;
+
+    setMinesLoading(true);
+    try {
+      const res = await fetch('/api/game/bet/mines/cashout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: playerName })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to cash out.');
+      }
+
+      setMinesActive(false);
+      setMinesResultMsg(`💰 Cashed Out! Won ${data.payout} AP (${data.multiplier}x)`);
+      setPoints?.(data.newPoints);
+
+      const newGrid = data.grid.map((val: string) => val);
+      setMinesGrid(newGrid);
+      setMinesRevealed(Array(25).fill(true));
+      showNotice?.(data.message, 'success');
+
+      setBetHistory(prev => [
+        {
+          id: 'b_' + Math.random().toString(36).substring(2, 11),
+          game: `Mines 💣 (${minesCount} Mines)`,
+          bet: Math.floor(Number(minesBet)),
+          result: `Cashed Out (${data.multiplier}x)`,
+          payout: data.payout,
+          won: true,
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        },
+        ...prev
+      ]);
+    } catch (err: any) {
+      showNotice?.(err.message || 'Error cashing out.', 'error');
+    } finally {
+      setMinesLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-8 pb-12">
       {/* Header Info */}
@@ -632,6 +853,46 @@ export default function AuraGames({
                 </div>
               </div>
             </div>
+
+            {/* Category 3: Interactive Event Games */}
+            {spinGameVisible && (
+              <div className="space-y-5 pt-4">
+                <div className="flex items-center gap-2.5 border-b border-zinc-800 pb-2 text-left">
+                  <span className="p-1.5 rounded-lg bg-pink-500/10 text-pink-400">
+                    <RotateCw className="w-4.5 h-4.5 animate-spin" style={{ animationDuration: '6s' }} />
+                  </span>
+                  <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🎡 Interactive Event Games</h3>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in text-left">
+                  <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                    <div className="space-y-3">
+                      <span className="text-xs font-mono font-bold text-pink-400 uppercase tracking-widest bg-pink-500/10 border border-pink-500/20 px-3 py-1 rounded-full inline-block">
+                        Fortune & Fate
+                      </span>
+                      <h3 className="text-xl font-bold text-white">Spin the Wheel Arena</h3>
+                      <p className="text-xs text-zinc-400 leading-relaxed">
+                        Claim prize rewards on the Live Prize Wheel (admins/allowed whitelisted users) or watch high-stake elimination raffles where the last person standing takes the prize!
+                      </p>
+                    </div>
+                    <div className="flex gap-2 w-full">
+                      <div className="flex-grow">
+                        <Tooltip content="Launch the spin wheels dashboard" position="top">
+                          <button
+                            onClick={() => {
+                              setActiveGame('spin');
+                            }}
+                            className="w-full py-3.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-pink-950/25"
+                          >
+                            <RotateCw className="w-4 h-4 animate-[spin_4s_linear_infinite]" /> Enter Arena
+                          </button>
+                        </Tooltip>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         ) : activeGame === 'math' ? (
           /* MATHS GAME DISPLAY */
@@ -978,6 +1239,33 @@ export default function AuraGames({
               </div>
             )}
           </motion.div>
+        ) : activeGame === 'spin' ? (
+          /* SPIN THE WHEEL ARENA DISPLAY */
+          <motion.div
+            key="spin-game"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="space-y-6"
+          >
+            <div className="flex justify-between items-center bg-zinc-900/30 p-4 rounded-2xl border border-zinc-800/60 shadow-lg text-left">
+              <button
+                onClick={() => setActiveGame(null)}
+                className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 transition-all text-zinc-400 hover:text-white flex items-center gap-2 text-xs font-bold"
+              >
+                <ArrowLeft className="w-4 h-4" /> Back to Game Hub
+              </button>
+            </div>
+            <SpinWheelArena
+              playerName={playerName}
+              isLoggedIn={isLoggedIn}
+              points={points}
+              setPoints={setPoints}
+              showNotice={showNotice}
+              isAdmin={isAdmin}
+              userDiscordId={userDiscordId}
+            />
+          </motion.div>
         ) : activeGame === 'puzzle' ? (
           /* SLIDE PUZZLE GAME DISPLAY */
           <motion.div
@@ -1112,6 +1400,22 @@ export default function AuraGames({
                     } disabled:opacity-50`}
                   >
                     🎰 Aura Slots
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!isRolling && !slotsRolling) {
+                        setActiveCasinoTab('mines');
+                        setLastWinMessage(null);
+                      }
+                    }}
+                    disabled={isRolling || slotsRolling}
+                    className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+                      activeCasinoTab === 'mines'
+                        ? 'bg-zinc-800 text-amber-400 border border-zinc-700/50 shadow'
+                        : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900/40'
+                    } disabled:opacity-50`}
+                  >
+                    💣 Mines Sweeper
                   </button>
                 </div>
 
@@ -1357,6 +1661,145 @@ export default function AuraGames({
                       <div className="flex justify-between font-mono"><span>No matches</span> <span className="text-zinc-600 font-mono">Deduct Wager</span></div>
                     </div>
 
+                  </div>
+                )}
+
+                {/* Tab content 3: Mines */}
+                {activeCasinoTab === 'mines' && (
+                  <div className="p-8 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl flex flex-col md:flex-row gap-8 items-stretch relative overflow-hidden">
+                    {/* Left: Interactive Grid */}
+                    <div className="flex-1 flex flex-col items-center justify-center space-y-4">
+                      <div className="text-center">
+                        <span className="text-[10px] uppercase font-mono tracking-widest text-pink-500 font-bold">5x5 Minefield</span>
+                        <h4 className="text-lg font-bold text-white flex items-center justify-center gap-2">
+                          💣 Mines Sweeper
+                        </h4>
+                      </div>
+
+                      {/* 5x5 Grid */}
+                      <div className="grid grid-cols-5 gap-3 w-full max-w-[340px] aspect-square p-4 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 shadow-inner">
+                        {Array(25).fill(null).map((_, idx) => {
+                          const isRevealed = minesRevealed[idx];
+                          const cellType = minesGrid[idx];
+                          return (
+                            <button
+                              key={idx}
+                              onClick={() => revealMinesTile(idx)}
+                              disabled={!minesActive || isRevealed || minesLoading}
+                              className={`aspect-square rounded-xl flex items-center justify-center text-2xl font-bold select-none transition-all duration-150 relative overflow-hidden ${
+                                isRevealed
+                                  ? cellType === 'mine'
+                                    ? 'bg-rose-500/20 border-2 border-rose-500 text-rose-500'
+                                    : cellType === 'gem'
+                                      ? 'bg-emerald-500/20 border-2 border-emerald-500 text-emerald-400'
+                                      : 'bg-zinc-800/80 border border-zinc-700 text-zinc-500'
+                                  : 'bg-zinc-800 hover:bg-zinc-700 active:scale-95 shadow-md border border-zinc-700/50 cursor-pointer'
+                              } disabled:cursor-not-allowed`}
+                            >
+                              {isRevealed ? (
+                                cellType === 'mine' ? (
+                                  '💣'
+                                ) : cellType === 'gem' ? (
+                                  '💎'
+                                ) : (
+                                  ''
+                                )
+                              ) : minesActive ? (
+                                <div className="absolute inset-0 bg-gradient-to-tr from-zinc-800/10 to-zinc-700/30 hover:to-zinc-600/30" />
+                              ) : (
+                                <div className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {minesResultMsg && (
+                        <div className={`py-2 px-4 rounded-xl text-xs font-bold ${minesResultMsg.includes('Hit') ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'}`}>
+                          {minesResultMsg}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right: Settings and actions panel */}
+                    <div className="w-full md:w-[240px] flex flex-col justify-between p-6 rounded-2xl bg-zinc-900/20 border border-zinc-800/80 space-y-6">
+                      <div className="space-y-4">
+                        {/* Wager Input */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] uppercase tracking-wider font-mono text-zinc-500 font-bold block">Wager Amount</label>
+                          <input
+                            type="number"
+                            min="5"
+                            disabled={minesActive || minesLoading}
+                            value={minesBet}
+                            onChange={(e) => setMinesBet(e.target.value)}
+                            placeholder="Wager AP"
+                            className="w-full px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono focus:outline-none focus:border-pink-500 disabled:opacity-50 text-center text-sm"
+                          />
+                        </div>
+
+                        {/* Mines Count */}
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center">
+                            <label className="text-[10px] uppercase tracking-wider font-mono text-zinc-500 font-bold">Mines Count</label>
+                            <span className="text-xs font-mono font-bold text-pink-500">{minesCount} 💣</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="1"
+                            max="24"
+                            disabled={minesActive || minesLoading}
+                            value={minesCount}
+                            onChange={(e) => setMinesCount(Number(e.target.value))}
+                            className="w-full accent-pink-500 disabled:opacity-50"
+                          />
+                        </div>
+
+                        {/* Multiplier / Next Multiplier */}
+                        <div className="grid grid-cols-2 gap-2 pt-2">
+                          <div className="p-2 rounded-xl bg-zinc-950 border border-zinc-800/60 text-center">
+                            <div className="text-[9px] uppercase tracking-wider font-mono text-zinc-500">Multiplier</div>
+                            <div className="text-sm font-black font-mono text-emerald-400">{minesMultiplier.toFixed(2)}x</div>
+                          </div>
+                          <div className="p-2 rounded-xl bg-zinc-950 border border-zinc-800/60 text-center">
+                            <div className="text-[9px] uppercase tracking-wider font-mono text-zinc-500">Next Tile</div>
+                            <div className="text-sm font-black font-mono text-zinc-400">
+                              {minesActive ? `${minesNextMultiplier.toFixed(2)}x` : '--'}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* CTA Buttons */}
+                      <div className="space-y-2.5">
+                        {!minesActive ? (
+                          <button
+                            onClick={startMinesGame}
+                            disabled={minesLoading || !isLoggedIn}
+                            className="w-full py-3 rounded-xl bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-black text-xs uppercase tracking-wider transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-lg active:scale-98 animate-pulse"
+                          >
+                            {minesLoading ? (
+                              <RotateCw className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              `Bet ${Math.floor(Number(minesBet) || 0)} AP`
+                            )}
+                          </button>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="text-center text-[10px] font-mono text-emerald-400 font-bold mb-1 animate-pulse">
+                              Pending Cashout: {Math.floor(Number(minesBet) * minesMultiplier)} AP
+                            </div>
+                            <button
+                              onClick={cashoutMinesGame}
+                              disabled={minesLoading || minesMultiplier <= 1.0}
+                              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs uppercase tracking-wider transition-all disabled:opacity-40 flex items-center justify-center gap-2 shadow-lg active:scale-98"
+                            >
+                              Cash Out
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
 

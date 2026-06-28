@@ -21,7 +21,8 @@ import {
   Bell,
   BellOff,
   Send,
-  Trophy
+  Trophy,
+  Wrench
 } from 'lucide-react';
 
 // Custom sub-components
@@ -76,6 +77,35 @@ export default function App() {
   });
 
   const [globalNotice, setGlobalNotice] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
+
+  // Maintenance State
+  const [maintenance, setMaintenance] = useState<{
+    enabled: boolean;
+    fullWebsite: boolean;
+    categories: string[];
+  }>({
+    enabled: false,
+    fullWebsite: false,
+    categories: []
+  });
+
+  // Fetch Maintenance Status periodically
+  useEffect(() => {
+    const fetchMaintenance = async () => {
+      try {
+        const res = await fetch('/api/maintenance/status');
+        if (res.ok) {
+          const data = await res.json();
+          setMaintenance(data);
+        }
+      } catch (err) {
+        console.error('Failed to fetch maintenance status:', err);
+      }
+    };
+    fetchMaintenance();
+    const interval = setInterval(fetchMaintenance, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const showGlobalNotice = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     setGlobalNotice({ message, type });
@@ -227,7 +257,7 @@ export default function App() {
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
       const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
+      if (event.origin !== window.location.origin) {
         return;
       }
 
@@ -338,6 +368,76 @@ export default function App() {
   ];
 
   const renderActiveContent = () => {
+    // Maintenance Bypass for admins
+    if (maintenance.enabled && !isAdmin) {
+      if (maintenance.fullWebsite) {
+        return (
+          <div className="max-w-2xl mx-auto py-24 px-4 text-center space-y-8 animate-fade-in">
+            <div className="relative inline-flex">
+              <div className="absolute inset-0 bg-amber-500/10 rounded-full blur-3xl animate-pulse" />
+              <div className="relative bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-6 shadow-2xl">
+                <Wrench className="w-16 h-16 text-amber-500 animate-[bounce_2s_infinite]" />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-amber-500 font-black px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
+                System Maintenances
+              </span>
+              <h2 className="text-3xl font-black text-white tracking-tight sm:text-4xl">
+                Website is undergoing maintenance
+              </h2>
+              <p className="text-zinc-400 text-sm max-w-md mx-auto leading-relaxed">
+                We are currently performing scheduled backend optimizations, database sync hardening, and adding new features. We will be back shortly!
+              </p>
+            </div>
+
+            <div className="flex flex-col items-center justify-center gap-3">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-950 border border-zinc-900 text-[10px] font-mono text-zinc-500 font-bold">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                <span>ESTIMATED DURATION: &lt; 1 HOUR</span>
+              </div>
+              <p className="text-[10px] text-zinc-600 font-mono">
+                Admins can login and bypass to view live status.
+              </p>
+            </div>
+          </div>
+        );
+      }
+      if (maintenance.categories.includes(activeTab)) {
+        const catLabel = navItems.find(item => item.id === activeTab)?.label || activeTab;
+        return (
+          <div className="max-w-2xl mx-auto py-24 px-4 text-center space-y-8 animate-fade-in">
+            <div className="relative inline-flex">
+              <div className="absolute inset-0 bg-amber-500/10 rounded-full blur-3xl animate-pulse" />
+              <div className="relative bg-zinc-900/50 border border-zinc-800/80 rounded-2xl p-6 shadow-2xl">
+                <Wrench className="w-16 h-16 text-amber-500 animate-[bounce_2s_infinite]" />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-amber-500 font-black px-3 py-1.5 rounded-full bg-amber-500/10 border border-amber-500/20">
+                Category Lock
+              </span>
+              <h2 className="text-3xl font-black text-white tracking-tight sm:text-4xl">
+                {catLabel} is currently under maintenance
+              </h2>
+              <p className="text-zinc-400 text-sm max-w-md mx-auto leading-relaxed">
+                This specific subsection is currently being updated or fine-tuned by the developers. The rest of the website remains fully operational.
+              </p>
+            </div>
+
+            <div className="flex flex-col items-center justify-center gap-3">
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-950 border border-zinc-900 text-[10px] font-mono text-zinc-500 font-bold">
+                <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                <span>EXPECTED RESOLUTION: SHORTLY</span>
+              </div>
+            </div>
+          </div>
+        );
+      }
+    }
+
     switch (activeTab) {
       case 'home':
         return <Home onNavigate={(tab) => setActiveTab(tab)} />;
@@ -358,6 +458,8 @@ export default function App() {
             points={points}
             setPoints={setPoints}
             showNotice={(msg, type) => showGlobalNotice(msg, type)}
+            isAdmin={isAdmin}
+            userDiscordId={discordUser?.id || ''}
           />
         );
       case 'afk':
