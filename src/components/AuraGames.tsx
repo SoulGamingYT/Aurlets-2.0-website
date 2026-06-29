@@ -4,6 +4,8 @@ import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw
 import { Tooltip } from './Tooltip';
 import SlidePuzzle from './SlidePuzzle';
 import SpinWheelArena from './SpinWheelArena';
+import HigherLower from './HigherLower';
+import RockPaperScissors from './RockPaperScissors';
 
 interface GameLog {
   id: string;
@@ -59,7 +61,7 @@ export default function AuraGames({
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'spin' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'spin' | 'higherlower' | 'rps' | null>(null);
 
   // Rules visibility states
   const [showMathRules, setShowMathRules] = useState<boolean>(false);
@@ -842,13 +844,75 @@ export default function AuraGames({
                         </button>
                       </Tooltip>
                     </div>
-                    <button
+                                    <button
                       onClick={() => handleCopyInvite('betting')}
                       title="Copy Invite Link"
                       className="px-3 py-3.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-amber-500/40 hover:bg-zinc-900 text-zinc-400 hover:text-amber-400 transition-all active:scale-95 shrink-0"
                     >
                       <Link2 className="w-4.5 h-4.5" />
                     </button>
+                  </div>
+                </div>
+
+                {/* Higher or Lower Card */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-purple-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3 text-left">
+                    <span className="text-xs font-mono font-bold text-purple-400 uppercase tracking-widest bg-purple-500/10 border border-purple-500/20 px-3 py-1 rounded-full inline-block">
+                      Multiplier Streak
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Higher or Lower</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Test your instincts! Guess if the next card is higher or lower. Accumulate win streak multipliers and cash out your Aura Points anytime!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Play Higher or Lower card guessing game" position="top">
+                        <button
+                          onClick={() => {
+                            if (!isLoggedIn) {
+                              onOpenAuthModal();
+                              return;
+                            }
+                            setActiveGame('higherlower');
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-purple-950/25"
+                        >
+                          <Play className="w-4 h-4 fill-white" /> Play Game
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Rock Paper Scissors Card */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-blue-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3 text-left">
+                    <span className="text-xs font-mono font-bold text-blue-400 uppercase tracking-widest bg-blue-500/10 border border-blue-500/20 px-3 py-1 rounded-full inline-block">
+                      Fast Action Double
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Rock Paper Scissors</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Compete against Aura Bot in the classic arena! Choose rock, paper, or scissors to double your wager. Clean draws get full refunds!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Play Rock Paper Scissors vs the bot" position="top">
+                        <button
+                          onClick={() => {
+                            if (!isLoggedIn) {
+                              onOpenAuthModal();
+                              return;
+                            }
+                            setActiveGame('rps');
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-blue-950/25"
+                        >
+                          <Play className="w-4.5 h-4.5 fill-white" /> Fight Bot
+                        </button>
+                      </Tooltip>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1264,6 +1328,36 @@ export default function AuraGames({
               showNotice={showNotice}
               isAdmin={isAdmin}
               userDiscordId={userDiscordId}
+            />
+          </motion.div>
+        ) : activeGame === 'higherlower' ? (
+          <motion.div
+            key="higher-lower"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+          >
+            <HigherLower
+              playerName={playerName}
+              points={points || 0}
+              setPoints={setPoints || (() => {})}
+              showNotice={showNotice as any}
+              onBack={() => setActiveGame(null)}
+            />
+          </motion.div>
+        ) : activeGame === 'rps' ? (
+          <motion.div
+            key="rps"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+          >
+            <RockPaperScissors
+              playerName={playerName}
+              points={points || 0}
+              setPoints={setPoints || (() => {})}
+              showNotice={showNotice as any}
+              onBack={() => setActiveGame(null)}
             />
           </motion.div>
         ) : activeGame === 'puzzle' ? (

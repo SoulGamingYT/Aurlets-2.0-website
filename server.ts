@@ -50,6 +50,10 @@ interface Farmer {
   isAfk?: boolean;
   afkSince?: number;
   afkReason?: string;
+  spinVouchers?: number;
+  bankBalance?: number;
+  robCooldown?: number;
+  dailyLastHeist?: number;
 }
 
 interface Giveaway {
@@ -219,6 +223,7 @@ async function startServer() {
   let lastAuditTimestamp: number = Date.now();
   let discordBotSecret: string = '';
 
+  let vaultState = { balance: 100000 };
   let customRolePrice = 49999;
   let presetRolesPriceList = [
     { id: '1417575135279452221', name: 'Blossom 🌸', emoji: '🌸', price: 2500 },
@@ -257,7 +262,8 @@ async function startServer() {
         eliminationGame,
         customRolePrice,
         presetRolesPriceList,
-        dailyUserSpins
+        dailyUserSpins,
+        serverVault: vaultState.balance
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -312,6 +318,7 @@ async function startServer() {
         if (parsed.customRolePrice !== undefined) customRolePrice = parsed.customRolePrice;
         if (parsed.presetRolesPriceList !== undefined) presetRolesPriceList = parsed.presetRolesPriceList;
         if (parsed.dailyUserSpins) dailyUserSpins = parsed.dailyUserSpins;
+        if (parsed.serverVault !== undefined) vaultState.balance = parsed.serverVault;
         if (parsed.dailyTransfers) dailyTransfers = parsed.dailyTransfers;
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
@@ -571,7 +578,7 @@ async function startServer() {
 
   // Start background Discord Gateway bot
   try {
-    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages, giveaways);
+    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages, giveaways, vaultState);
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
@@ -2397,7 +2404,9 @@ async function startServer() {
   app.get('/api/shop/config', (req, res) => {
     res.json({
       customRolePrice,
-      presetRoles: presetRolesPriceList
+      presetRoles: presetRolesPriceList,
+      dailyLimit: spinGame.dailyLimit || 1,
+      serverVault: vaultState.balance
     });
   });
 
@@ -2405,15 +2414,27 @@ async function startServer() {
     if (!isRequestAdmin(req)) {
       return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
     }
-    const { customRolePrice: newPrice, presetRoles: newPresetRoles } = req.body;
+    const { customRolePrice: newPrice, presetRoles: newPresetRoles, dailyLimit: newLimit, serverVault: newVault } = req.body;
     if (newPrice !== undefined && typeof newPrice === 'number' && !isNaN(newPrice)) {
       customRolePrice = newPrice;
     }
     if (newPresetRoles !== undefined && Array.isArray(newPresetRoles)) {
       presetRolesPriceList = newPresetRoles;
     }
+    if (newLimit !== undefined && typeof newLimit === 'number' && !isNaN(newLimit)) {
+      spinGame.dailyLimit = newLimit;
+    }
+    if (newVault !== undefined && typeof newVault === 'number' && !isNaN(newVault)) {
+      vaultState.balance = newVault;
+    }
     saveData();
-    res.json({ success: true, customRolePrice, presetRoles: presetRolesPriceList });
+    res.json({
+      success: true,
+      customRolePrice,
+      presetRoles: presetRolesPriceList,
+      dailyLimit: spinGame.dailyLimit || 1,
+      serverVault: vaultState.balance
+    });
   });
 
   // --- ADMIN HELPER ---
@@ -4275,6 +4296,10 @@ Guidelines for your responses:
     const segment = spinGame.segments[segmentIndex];
     let spinUser = username || (isAdmin ? 'Admin' : 'Whitelisted User');
     let rewardApplied = 0;
+    let voucherUsed = false;
+    let spinsToday = 0;
+    const todayStr = new Date().toISOString().split('T')[0];
+    const limit = spinGame.dailyLimit || 1;
     
     if (spinUser && spinUser !== 'Admin' && spinUser !== 'Whitelisted User') {
       let farmer = farmers[spinUser];
@@ -4291,15 +4316,63 @@ Guidelines for your responses:
         farmer = farmers[spinUser];
       }
       
-      if (segment.type === 'win') {
-        farmer.points += segment.value;
-        rewardApplied = segment.value;
-      } else if (segment.type === 'lose') {
-        if (segment.value === -99999) {
+      // If not admin, check limits and vouchers
+      if (!isAdmin) {
+        const hasVoucher = (farmer.spinVouchers || 0) > 0;
+        if (!dailyUserSpins[spinUser]) dailyUserSpins[spinUser] = {};
+        spinsToday = dailyUserSpins[spinUser][todayStr] || 0;
+        
+        if (spinsToday >= limit) {
+          if (hasVoucher) {
+            farmer.spinVouchers = (farmer.spinVouchers || 0) - 1;
+            voucherUsed = true;
+          } else {
+            return res.status(400).json({
+              error: `You have reached your daily limit of ${limit} spins. Obtain a spin voucher to spin again!`
+            });
+          }
+        } else {
+          dailyUserSpins[spinUser][todayStr] = spinsToday + 1;
+          spinsToday = dailyUserSpins[spinUser][todayStr];
+        }
+      }
+      
+      const parseSegment = (seg: any): { label: string; value: number; type: 'win' | 'lose' } => {
+        if (seg && typeof seg === 'object' && seg.type !== undefined) {
+          return seg;
+        }
+        const labelStr = String(seg || '');
+        let value = 0;
+        let type: 'win' | 'lose' = 'win';
+        const clean = labelStr.toLowerCase().trim();
+        if (clean.includes('lose all')) {
+          value = -99999;
+          type = 'lose';
+        } else if (clean.includes('lose') || clean.includes('-')) {
+          const match = clean.match(/\d+/);
+          value = match ? -parseInt(match[0]) : 0;
+          type = 'lose';
+        } else if (clean.includes('try again') || clean.includes('no prize') || clean.includes('safe zone') || clean.includes('no reward')) {
+          value = 0;
+          type = 'win';
+        } else {
+          const match = clean.match(/\d+/);
+          value = match ? parseInt(match[0]) : 0;
+          type = 'win';
+        }
+        return { label: labelStr, value, type };
+      };
+
+      const parsedSegment = parseSegment(segment);
+      if (parsedSegment.type === 'win') {
+        farmer.points += parsedSegment.value;
+        rewardApplied = parsedSegment.value;
+      } else if (parsedSegment.type === 'lose') {
+        if (parsedSegment.value === -99999) {
           rewardApplied = -farmer.points;
           farmer.points = 0;
         } else {
-          const deduct = Math.min(farmer.points, Math.abs(segment.value));
+          const deduct = Math.min(farmer.points, Math.abs(parsedSegment.value));
           farmer.points -= deduct;
           rewardApplied = -deduct;
         }
@@ -4321,7 +4394,10 @@ Guidelines for your responses:
       segment,
       winnerName: spinUser,
       rewardApplied,
-      spinGame
+      spinGame,
+      userVouchers: (spinUser && farmers[spinUser]) ? (farmers[spinUser].spinVouchers || 0) : 0,
+      spinsToday,
+      voucherUsed
     });
   });
 

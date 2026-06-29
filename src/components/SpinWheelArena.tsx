@@ -69,6 +69,9 @@ export default function SpinWheelArena({
     segments: ['50 AP', '100 AP', 'No Prize', '500 AP', '10 AP', 'Jackpot 🏆']
   });
   const [isAllowedToSpin, setIsAllowedToSpin] = useState<boolean>(false);
+  const [userVouchers, setUserVouchers] = useState<number>(0);
+  const [spinsToday, setSpinsToday] = useState<number>(0);
+  const [dailyLimit, setDailyLimit] = useState<number>(1);
   const [isSpinningLive, setIsSpinningLive] = useState<boolean>(false);
   const [liveLandedSegment, setLiveLandedSegment] = useState<string | null>(null);
   const [liveLog, setLiveLog] = useState<string[]>([]);
@@ -132,17 +135,24 @@ export default function SpinWheelArena({
         headers['x-admin-discord-id'] = userDiscordId;
         headers['x-admin-username'] = playerName;
       }
-      const res = await fetch(`/api/games/spin/state?discordId=${encodeURIComponent(userDiscordId)}`, {
+      const res = await fetch(`/api/games/spin/state?discordId=${encodeURIComponent(userDiscordId)}&username=${encodeURIComponent(playerName)}`, {
         headers
       });
       if (res.ok) {
         const data = await res.json();
+        const segmentsMapped = (data.spinGame.segments || []).map((seg: any) => {
+          if (seg && typeof seg === 'object') return seg.label || '';
+          return String(seg || '');
+        });
         setLiveConfig({
           visibleToPublic: data.spinGame.visibleToPublic,
           allowedDiscordIds: data.spinGame.allowedDiscordIds || [],
-          segments: data.spinGame.segments || []
+          segments: segmentsMapped
         });
         setIsAllowedToSpin(data.isAllowedToSpin || isAdmin);
+        setUserVouchers(data.userVouchers || 0);
+        setSpinsToday(data.spinsToday || 0);
+        setDailyLimit(data.dailyLimit || 1);
       } else if (isAdmin) {
         setIsAllowedToSpin(true);
       }
@@ -785,15 +795,50 @@ export default function SpinWheelArena({
           <div className="w-full flex flex-col items-center space-y-3 z-10 pt-2">
             {activeTab === 'live' ? (
               <>
+                {isAllowedToSpin && !isAdmin && (
+                  <div className="flex gap-4 text-xs font-mono text-zinc-400 bg-zinc-900/40 border border-zinc-900 px-4 py-2 rounded-xl">
+                    <div>Daily Spins: <span className="text-white font-bold">{spinsToday} / {dailyLimit}</span></div>
+                    <div className="border-l border-zinc-800 h-4" />
+                    <div>Spin Vouchers: <span className="text-pink-400 font-bold">🎟️ {userVouchers}</span></div>
+                  </div>
+                )}
+
                 {isAllowedToSpin ? (
-                  <button
-                    onClick={handleTriggerLiveSpin}
-                    disabled={isSpinningLive}
-                    className="w-full max-w-sm py-4 rounded-xl bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white font-black uppercase tracking-wider text-xs transition-all shadow-lg hover:shadow-pink-500/20 active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2"
-                  >
-                    <RotateCw className={`w-4 h-4 ${isSpinningLive ? 'animate-spin' : ''}`} />
-                    {isSpinningLive ? 'Spinning Wheel...' : 'Trigger Spin !'}
-                  </button>
+                  (() => {
+                    const isOutOfSpins = !isAdmin && (spinsToday >= dailyLimit) && (userVouchers <= 0);
+                    const willUseVoucher = !isAdmin && (spinsToday >= dailyLimit) && (userVouchers > 0);
+
+                    if (isOutOfSpins) {
+                      return (
+                        <div className="w-full max-w-sm p-4 rounded-xl bg-red-950/20 border border-red-900/40 text-center space-y-1.5">
+                          <div className="text-xs font-bold text-red-400">Daily Limit Reached</div>
+                          <p className="text-[10px] text-zinc-500">
+                            You've used all {dailyLimit} daily spins. Earn or request a **Spin Voucher** from staff to spin again!
+                          </p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <button
+                        onClick={handleTriggerLiveSpin}
+                        disabled={isSpinningLive}
+                        className={`w-full max-w-sm py-4 rounded-xl text-white font-black uppercase tracking-wider text-xs transition-all shadow-lg active:scale-95 disabled:opacity-40 flex items-center justify-center gap-2 ${
+                          willUseVoucher
+                            ? 'bg-gradient-to-r from-purple-600 via-pink-600 to-amber-500 hover:from-purple-500 hover:to-amber-400 shadow-purple-500/20'
+                            : 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 shadow-pink-500/20'
+                        }`}
+                      >
+                        <RotateCw className={`w-4 h-4 ${isSpinningLive ? 'animate-spin' : ''}`} />
+                        {isSpinningLive
+                          ? 'Spinning Wheel...'
+                          : willUseVoucher
+                            ? `Use 1 Spin Voucher (${userVouchers} Left)`
+                            : 'Trigger Spin !'
+                        }
+                      </button>
+                    );
+                  })()
                 ) : (
                   <div className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-800 text-center space-y-1 max-w-sm w-full">
                     <ShieldAlert className="w-4 h-4 text-amber-500 mx-auto" />

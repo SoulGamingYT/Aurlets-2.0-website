@@ -61,6 +61,10 @@ interface Farmer {
   isAfk?: boolean;
   afkSince?: number;
   afkReason?: string;
+  spinVouchers?: number;
+  bankBalance?: number;
+  robCooldown?: number;
+  dailyLastHeist?: number;
 }
 
 interface Giveaway {
@@ -250,7 +254,8 @@ export function startDiscordBot(
     approved: boolean;
     createdAt: number;
   }>,
-  giveaways?: Giveaway[]
+  giveaways?: Giveaway[],
+  vaultState?: { balance: number }
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
