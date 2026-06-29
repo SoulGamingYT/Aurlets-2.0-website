@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Gamepad2, Play, Users, Send, CheckCircle, HelpCircle, Trophy, RefreshCw, AlertCircle, Heart, Coins, Sparkles, ArrowLeft, RotateCw, Landmark, Grid, LayoutGrid, Link2 } from 'lucide-react';
 import { Tooltip } from './Tooltip';
 import SlidePuzzle from './SlidePuzzle';
-import SpinWheelArena from './SpinWheelArena';
 import HigherLower from './HigherLower';
 import RockPaperScissors from './RockPaperScissors';
 
@@ -61,7 +60,7 @@ export default function AuraGames({
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'spin' | 'higherlower' | 'rps' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'higherlower' | 'rps' | null>(null);
 
   // Rules visibility states
   const [showMathRules, setShowMathRules] = useState<boolean>(false);
@@ -109,35 +108,6 @@ export default function AuraGames({
   const [kotdPlayers, setKotdPlayers] = useState<any[]>([]);
   const [kotdLogs, setKotdLogs] = useState<GameLog[]>([]);
   const [kotdRound, setKotdRound] = useState<number>(1);
-
-  // Spin Game Visibility State
-  const [spinGameVisible, setSpinGameVisible] = useState<boolean>(isAdmin);
-
-  useEffect(() => {
-    const checkSpinVisibility = async () => {
-      try {
-        const headers: Record<string, string> = {};
-        if (isAdmin) {
-          headers['x-admin-discord-id'] = userDiscordId;
-          headers['x-admin-username'] = playerName;
-        }
-        const res = await fetch(`/api/games/spin/state?discordId=${encodeURIComponent(userDiscordId)}`, {
-          headers
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setSpinGameVisible(data.spinGame.visibleToPublic || data.isAdmin || data.isAllowedToSpin || isAdmin);
-        } else if (isAdmin) {
-          setSpinGameVisible(true);
-        }
-      } catch {
-        if (isAdmin) setSpinGameVisible(true);
-      }
-    };
-    checkSpinVisibility();
-    const interval = setInterval(checkSpinVisibility, 10000);
-    return () => clearInterval(interval);
-  }, [userDiscordId, isAdmin, playerName]);
 
   // Synchronize playerName with localStorage changes
   useEffect(() => {
@@ -917,46 +887,6 @@ export default function AuraGames({
                 </div>
               </div>
             </div>
-
-            {/* Category 3: Interactive Event Games */}
-            {spinGameVisible && (
-              <div className="space-y-5 pt-4">
-                <div className="flex items-center gap-2.5 border-b border-zinc-800 pb-2 text-left">
-                  <span className="p-1.5 rounded-lg bg-pink-500/10 text-pink-400">
-                    <RotateCw className="w-4.5 h-4.5 animate-spin" style={{ animationDuration: '6s' }} />
-                  </span>
-                  <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🎡 Interactive Event Games</h3>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 animate-fade-in text-left">
-                  <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
-                    <div className="space-y-3">
-                      <span className="text-xs font-mono font-bold text-pink-400 uppercase tracking-widest bg-pink-500/10 border border-pink-500/20 px-3 py-1 rounded-full inline-block">
-                        Fortune & Fate
-                      </span>
-                      <h3 className="text-xl font-bold text-white">Spin the Wheel Arena</h3>
-                      <p className="text-xs text-zinc-400 leading-relaxed">
-                        Claim prize rewards on the Live Prize Wheel (admins/allowed whitelisted users) or watch high-stake elimination raffles where the last person standing takes the prize!
-                      </p>
-                    </div>
-                    <div className="flex gap-2 w-full">
-                      <div className="flex-grow">
-                        <Tooltip content="Launch the spin wheels dashboard" position="top">
-                          <button
-                            onClick={() => {
-                              setActiveGame('spin');
-                            }}
-                            className="w-full py-3.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-pink-950/25"
-                          >
-                            <RotateCw className="w-4 h-4 animate-[spin_4s_linear_infinite]" /> Enter Arena
-                          </button>
-                        </Tooltip>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
           </motion.div>
         ) : activeGame === 'math' ? (
           /* MATHS GAME DISPLAY */
@@ -1302,33 +1232,6 @@ export default function AuraGames({
                 </div>
               </div>
             )}
-          </motion.div>
-        ) : activeGame === 'spin' ? (
-          /* SPIN THE WHEEL ARENA DISPLAY */
-          <motion.div
-            key="spin-game"
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.95 }}
-            className="space-y-6"
-          >
-            <div className="flex justify-between items-center bg-zinc-900/30 p-4 rounded-2xl border border-zinc-800/60 shadow-lg text-left">
-              <button
-                onClick={() => setActiveGame(null)}
-                className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 transition-all text-zinc-400 hover:text-white flex items-center gap-2 text-xs font-bold"
-              >
-                <ArrowLeft className="w-4 h-4" /> Back to Game Hub
-              </button>
-            </div>
-            <SpinWheelArena
-              playerName={playerName}
-              isLoggedIn={isLoggedIn}
-              points={points}
-              setPoints={setPoints}
-              showNotice={showNotice}
-              isAdmin={isAdmin}
-              userDiscordId={userDiscordId}
-            />
           </motion.div>
         ) : activeGame === 'higherlower' ? (
           <motion.div

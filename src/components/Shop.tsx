@@ -212,7 +212,7 @@ export default function Shop({
         setPoints(data.newPoints);
         setRedeemMessage({ text: data.message || 'Successfully redeemed code!', type: 'success' });
         setPromoCode('');
-        showNotice(`Code redeemed! +${data.rewardAmount} AP.`, 'success');
+        showNotice(data.message || 'Successfully redeemed code!', 'success');
       } else {
         setRedeemMessage({ text: data.error || 'Failed to redeem code.', type: 'error' });
       }

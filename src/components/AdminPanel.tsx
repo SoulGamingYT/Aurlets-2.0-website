@@ -30,6 +30,7 @@ interface AdminPanelProps {
 interface Farmer {
   name: string;
   points: number;
+  spinVouchers?: number;
   avatarUrl: string;
 }
 
@@ -40,6 +41,7 @@ interface RedeemCode {
   uses: number;
   redeemedBy: string[];
   createdAt: number;
+  rewardType?: 'points' | 'voucher';
 }
 
 export interface AuditReport {
@@ -88,7 +90,7 @@ export default function AdminPanel({
   const [users, setUsers] = useState<Farmer[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoadingUsers, setIsLoadingUsers] = useState(false);
-  const [userPointsAction, setUserPointsAction] = useState<Record<string, { value: string; mode: 'add' | 'subtract' | 'set' }>>({});
+  const [userPointsAction, setUserPointsAction] = useState<Record<string, { value: string; mode: 'add' | 'subtract' | 'set'; type: 'points' | 'vouchers' }>>({});
 
   // States for Code Management
   const [codes, setCodes] = useState<RedeemCode[]>([]);
@@ -96,6 +98,7 @@ export default function AdminPanel({
   const [newCodeName, setNewCodeName] = useState('');
   const [newCodeReward, setNewCodeReward] = useState('100');
   const [newCodeMaxUses, setNewCodeMaxUses] = useState('50');
+  const [newCodeRewardType, setNewCodeRewardType] = useState<'points' | 'voucher'>('points');
 
   // States for Points Audit
   const [auditReports, setAuditReports] = useState<AuditReport[]>([]);
@@ -467,11 +470,11 @@ export default function AdminPanel({
 
   // --- ACTIONS ---
   const handleUpdatePoints = async (userName: string) => {
-    const config = userPointsAction[userName] || { value: '', mode: 'add' };
+    const config = userPointsAction[userName] || { value: '', mode: 'add', type: 'points' };
     const numValue = parseInt(config.value);
     
     if (isNaN(numValue) || numValue < 0) {
-      showNotice('Please enter a valid positive number for points.', 'error');
+      showNotice('Please enter a valid positive number.', 'error');
       return;
     }
 
@@ -486,16 +489,17 @@ export default function AdminPanel({
         body: JSON.stringify({
           name: userName,
           points: numValue,
-          action: config.mode
+          action: config.mode,
+          type: config.type || 'points'
         })
       });
 
       const data = await res.json();
       if (res.ok) {
-        showNotice(`Successfully updated points for ${userName} to ${data.newPoints} AP!`, 'success');
+        showNotice(`Successfully updated ${config.type === 'vouchers' ? 'vouchers' : 'points'} for ${userName}!`, 'success');
         
         // Update local list
-        setUsers(prev => prev.map(u => u.name === userName ? { ...u, points: data.newPoints } : u));
+        setUsers(prev => prev.map(u => u.name === userName ? { ...u, points: data.newPoints, spinVouchers: data.newVouchers } : u));
         
         // Clear input
         setUserPointsAction(prev => ({
@@ -508,10 +512,10 @@ export default function AdminPanel({
           onPointsUpdated(data.newPoints);
         }
       } else {
-        showNotice(data.error || 'Failed to update user points.', 'error');
+        showNotice(data.error || 'Failed to update user values.', 'error');
       }
     } catch (err: any) {
-      showNotice(err.message || 'Error updating points.', 'error');
+      showNotice(err.message || 'Error updating values.', 'error');
     }
   };
 
@@ -544,7 +548,8 @@ export default function AdminPanel({
         body: JSON.stringify({
           code: newCodeName.toUpperCase().trim(),
           rewardAmount: reward,
-          maxUses: maxUses
+          maxUses: maxUses,
+          rewardType: newCodeRewardType
         })
       });
 
@@ -920,7 +925,7 @@ export default function AdminPanel({
                   </thead>
                   <tbody className="divide-y divide-zinc-900/60">
                     {filteredUsers.map((user) => {
-                      const userAct = userPointsAction[user.name] || { value: '', mode: 'add' };
+                      const userAct = userPointsAction[user.name] || { value: '', mode: 'add', type: 'points' };
                       return (
                         <tr key={user.name} className="hover:bg-zinc-900/10 transition-colors">
                           <td className="py-3.5 px-4">
@@ -940,13 +945,37 @@ export default function AdminPanel({
                             </div>
                           </td>
                           <td className="py-3.5 px-4 font-mono text-xs font-bold">
-                            <div className="flex items-center gap-1.5">
-                              <span className="text-zinc-400">{user.points}</span>
-                              <span className="text-[10px] text-pink-500 font-semibold">AP</span>
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-zinc-400">{user.points.toLocaleString()}</span>
+                                <span className="text-[10px] text-pink-500 font-semibold">AP</span>
+                              </div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-zinc-500">{user.spinVouchers || 0}</span>
+                                <span className="text-[10px] text-pink-400 font-semibold">Vouchers</span>
+                              </div>
                             </div>
                           </td>
                           <td className="py-3.5 px-4">
                             <div className="flex items-center justify-center gap-2 max-w-sm mx-auto">
+                              {/* Type selection */}
+                              <div className="flex bg-zinc-950 p-0.5 rounded-lg border border-zinc-850 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => setUserPointsAction(p => ({ ...p, [user.name]: { ...userAct, type: 'points' } }))}
+                                  className={`px-1.5 py-0.5 text-[9px] font-mono rounded-md transition-all ${userAct.type !== 'vouchers' ? 'bg-pink-600/20 text-pink-400 border border-pink-500/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                >
+                                  Points
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setUserPointsAction(p => ({ ...p, [user.name]: { ...userAct, type: 'vouchers' } }))}
+                                  className={`px-1.5 py-0.5 text-[9px] font-mono rounded-md transition-all ${userAct.type === 'vouchers' ? 'bg-pink-600/20 text-pink-400 border border-pink-500/30' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                >
+                                  Vouchers
+                                </button>
+                              </div>
+
                               {/* Mode selection buttons */}
                               <div className="flex bg-zinc-900/80 p-0.5 rounded-lg border border-zinc-800 shrink-0">
                                 <button
@@ -1024,14 +1053,50 @@ export default function AdminPanel({
                 />
               </div>
 
+              <div className="space-y-1.5">
+                <label className="text-zinc-400 font-mono uppercase tracking-wider text-[10px]">Reward Type</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewCodeRewardType('points');
+                      setNewCodeReward('100');
+                    }}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all ${
+                      newCodeRewardType === 'points'
+                        ? 'bg-pink-600/10 border-pink-500 text-pink-400 font-black'
+                        : 'bg-zinc-900 border-zinc-850 hover:bg-zinc-850 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    💰 Aura Points
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewCodeRewardType('voucher');
+                      setNewCodeReward('5');
+                    }}
+                    className={`py-2 px-3 rounded-lg text-xs font-bold border transition-all ${
+                      newCodeRewardType === 'voucher'
+                        ? 'bg-pink-600/10 border-pink-500 text-pink-400 font-black'
+                        : 'bg-zinc-900 border-zinc-850 hover:bg-zinc-850 text-zinc-400 hover:text-white'
+                    }`}
+                  >
+                    🎟️ Spin Vouchers
+                  </button>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
-                  <label className="text-zinc-400 font-mono uppercase tracking-wider text-[10px]">Aura Points Reward</label>
+                  <label className="text-zinc-400 font-mono uppercase tracking-wider text-[10px]">
+                    {newCodeRewardType === 'voucher' ? 'Vouchers Reward' : 'Aura Points Reward'}
+                  </label>
                   <input
                     type="number"
                     min="1"
                     required
-                    placeholder="100"
+                    placeholder={newCodeRewardType === 'voucher' ? '5' : '100'}
                     value={newCodeReward}
                     onChange={(e) => setNewCodeReward(e.target.value)}
                     className="w-full px-4 py-2.5 bg-zinc-900 border border-zinc-800 rounded-xl focus:border-pink-500 focus:outline-none text-xs text-white font-mono text-center"
@@ -1087,8 +1152,8 @@ export default function AdminPanel({
                         <span className="px-3 py-1 bg-pink-500/15 border border-pink-500/35 text-xs text-pink-400 font-mono font-bold rounded-lg select-all">
                           {codeItem.code}
                         </span>
-                        <span className="text-[10px] text-zinc-400 font-mono">
-                          +{codeItem.rewardAmount} AP
+                        <span className="text-[10px] text-zinc-400 font-mono flex items-center gap-1">
+                          +{codeItem.rewardAmount} {codeItem.rewardType === 'voucher' ? 'Spin Vouchers 🎟️' : 'AP 💰'}
                         </span>
                       </div>
 

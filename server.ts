@@ -104,6 +104,7 @@ async function startServer() {
   let redeemCodes: Record<string, {
     code: string;
     rewardAmount: number;
+    rewardType?: 'points' | 'voucher';
     maxUses: number;
     uses: number;
     redeemedBy: string[];
@@ -112,6 +113,7 @@ async function startServer() {
     'AURLETS100': {
       code: 'AURLETS100',
       rewardAmount: 100,
+      rewardType: 'points',
       maxUses: 100,
       uses: 0,
       redeemedBy: [],
@@ -2514,6 +2516,59 @@ async function startServer() {
     res.json({ points: farmer.points, farmer });
   });
 
+  // --- ADD POINTS ENDPOINT ---
+  app.post('/api/points/add', (req, res) => {
+    const { username, amount } = req.body;
+    if (!username || amount === undefined) {
+      return res.status(400).json({ error: 'Username and amount are required.' });
+    }
+    let farmer = farmers[username];
+    if (!farmer) {
+      farmers[username] = {
+        name: username,
+        points: 0,
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: Date.now()
+      };
+      farmer = farmers[username];
+    }
+    const val = parseInt(amount, 10);
+    if (isNaN(val) || val < 0) {
+      return res.status(400).json({ error: 'Invalid points amount.' });
+    }
+    farmer.points += val;
+    saveData();
+    res.json({ success: true, points: farmer.points });
+  });
+
+  // --- DEDUCT POINTS ENDPOINT ---
+  app.post('/api/points/deduct', (req, res) => {
+    const { username, amount } = req.body;
+    if (!username || amount === undefined) {
+      return res.status(400).json({ error: 'Username and amount are required.' });
+    }
+    let farmer = farmers[username];
+    if (!farmer) {
+      farmers[username] = {
+        name: username,
+        points: 500, // Give guest players 500 AP to start playing
+        avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
+        lastActive: Date.now()
+      };
+      farmer = farmers[username];
+    }
+    const val = parseInt(amount, 10);
+    if (isNaN(val) || val <= 0) {
+      return res.status(400).json({ error: 'Invalid deduction amount.' });
+    }
+    if (farmer.points < val) {
+      return res.status(400).json({ error: 'Insufficient points!' });
+    }
+    farmer.points -= val;
+    saveData();
+    res.json({ success: true, points: farmer.points });
+  });
+
   // --- TRANSFER POINTS ENDPOINT ---
   app.post('/api/user/transfer-points', (req, res) => {
     const { senderName, targetInput, amount } = req.body;
@@ -2706,31 +2761,43 @@ async function startServer() {
     codeItem.uses += 1;
     codeItem.redeemedBy.push(name);
 
-    if (farmers[name]) {
-      farmers[name].points = (farmers[name].points || 0) + codeItem.rewardAmount;
-    } else {
+    if (!farmers[name]) {
       farmers[name] = {
         name,
-        points: codeItem.rewardAmount,
+        points: 0,
+        spinVouchers: 0,
         avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
         lastActive: Date.now()
       };
     }
 
+    const rewardType = codeItem.rewardType || 'points';
+    const amount = codeItem.rewardAmount;
+
+    if (rewardType === 'voucher') {
+      farmers[name].spinVouchers = (farmers[name].spinVouchers || 0) + amount;
+    } else {
+      farmers[name].points = (farmers[name].points || 0) + amount;
+    }
+
     saveData();
+
+    const rewardLabel = rewardType === 'voucher' ? `${amount} Spin Vouchers 🎟️` : `${amount.toLocaleString()} AP 💰`;
 
     logActivity(
       '🎁 Promo Code Redeemed',
       `**${name}** has successfully redeemed promo code **"${cleanCode}"** on the website!\n` +
-      `Gained **+${codeItem.rewardAmount.toLocaleString()} AP** (Current Balance: **${farmers[name].points.toLocaleString()} AP**).`,
+      `Gained **+${rewardLabel}** (Current Balance: **${farmers[name].points.toLocaleString()} AP**, **${farmers[name].spinVouchers || 0} Spin Vouchers**).`,
       3066993
     );
 
     res.json({
       success: true,
-      rewardAmount: codeItem.rewardAmount,
+      rewardAmount: amount,
+      rewardType,
       newPoints: farmers[name].points,
-      message: `Successfully redeemed! Gained +${codeItem.rewardAmount} Aura Points.`
+      newVouchers: farmers[name].spinVouchers || 0,
+      message: `Successfully redeemed! Gained +${rewardLabel}.`
     });
   });
 
@@ -2742,6 +2809,7 @@ async function startServer() {
     const list = Object.values(farmers).map(f => ({
       name: f.name,
       points: f.points,
+      spinVouchers: f.spinVouchers || 0,
       avatarUrl: f.avatarUrl
     })).sort((a, b) => b.points - a.points);
     res.json(list);
@@ -2751,7 +2819,7 @@ async function startServer() {
     if (!isRequestAdmin(req)) {
       return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
     }
-    const { name, points, action } = req.body;
+    const { name, points, action, type } = req.body;
     if (!name || points === undefined) {
       return res.status(400).json({ error: 'Name and points values are required.' });
     }
@@ -2760,9 +2828,25 @@ async function startServer() {
       farmers[name] = {
         name,
         points: 0,
+        spinVouchers: 0,
         avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80',
         lastActive: Date.now()
       };
+    }
+
+    if (type === 'vouchers') {
+      const currentVouchers = farmers[name].spinVouchers || 0;
+      let newVouchers = currentVouchers;
+      if (action === 'add') {
+        newVouchers = currentVouchers + points;
+      } else if (action === 'subtract') {
+        newVouchers = Math.max(0, currentVouchers - points);
+      } else if (action === 'set') {
+        newVouchers = Math.max(0, points);
+      }
+      farmers[name].spinVouchers = newVouchers;
+      saveData();
+      return res.json({ success: true, name, newPoints: farmers[name].points, newVouchers });
     }
 
     const currentPoints = farmers[name].points || 0;
@@ -2778,7 +2862,7 @@ async function startServer() {
 
     farmers[name].points = newPoints;
     saveData();
-    res.json({ success: true, name, newPoints });
+    res.json({ success: true, name, newPoints, newVouchers: farmers[name].spinVouchers || 0 });
   });
 
   app.get('/api/admin/codes', (req, res) => {
@@ -2792,7 +2876,7 @@ async function startServer() {
     if (!isRequestAdmin(req)) {
       return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
     }
-    const { code, rewardAmount, maxUses } = req.body;
+    const { code, rewardAmount, maxUses, rewardType } = req.body;
     if (!code || !rewardAmount || !maxUses) {
       return res.status(400).json({ error: 'Missing code details.' });
     }
@@ -2804,8 +2888,9 @@ async function startServer() {
 
     redeemCodes[cleanCode] = {
       code: cleanCode,
-      rewardAmount: parseInt(rewardAmount),
-      maxUses: parseInt(maxUses),
+      rewardAmount: parseInt(rewardAmount, 10),
+      maxUses: parseInt(maxUses, 10),
+      rewardType: rewardType || 'points',
       uses: 0,
       redeemedBy: [],
       createdAt: Date.now()
@@ -4261,7 +4346,7 @@ Guidelines for your responses:
     if (!isRequestAdmin(req)) {
       return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
     }
-    const { visibleToPublic, allowedDiscordIds, segments } = req.body;
+    const { visibleToPublic, allowedDiscordIds, segments, dailyLimit } = req.body;
     if (visibleToPublic !== undefined) spinGame.visibleToPublic = !!visibleToPublic;
     if (allowedDiscordIds !== undefined) {
       spinGame.allowedDiscordIds = Array.isArray(allowedDiscordIds)
@@ -4272,6 +4357,9 @@ Guidelines for your responses:
     }
     if (segments !== undefined && Array.isArray(segments)) {
       spinGame.segments = segments;
+    }
+    if (dailyLimit !== undefined) {
+      spinGame.dailyLimit = parseInt(dailyLimit, 10) || 1;
     }
     saveData();
     res.json({ success: true, spinGame });
@@ -4395,6 +4483,7 @@ Guidelines for your responses:
       winnerName: spinUser,
       rewardApplied,
       spinGame,
+      farmerPoints: (spinUser && farmers[spinUser]) ? farmers[spinUser].points : undefined,
       userVouchers: (spinUser && farmers[spinUser]) ? (farmers[spinUser].spinVouchers || 0) : 0,
       spinsToday,
       voucherUsed

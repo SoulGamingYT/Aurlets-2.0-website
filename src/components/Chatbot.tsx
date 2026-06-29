@@ -75,7 +75,18 @@ export const Chatbot: React.FC = () => {
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end">
+    <motion.div
+      drag
+      dragMomentum={false}
+      dragElastic={0.1}
+      dragConstraints={{
+        left: typeof window !== 'undefined' ? -window.innerWidth + 80 : -1000,
+        right: 20,
+        top: typeof window !== 'undefined' ? -window.innerHeight + 80 : -800,
+        bottom: 20
+      }}
+      className="fixed bottom-6 right-6 z-50 flex flex-col items-end touch-none"
+    >
       {/* Chat Window */}
       <AnimatePresence>
         {isOpen && (
@@ -84,7 +95,8 @@ export const Chatbot: React.FC = () => {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-            className="w-[360px] sm:w-[400px] h-[520px] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col mb-4"
+            onPointerDown={(e) => e.stopPropagation()}
+            className="w-[360px] sm:w-[400px] h-[520px] bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col mb-4 cursor-default select-text"
           >
             {/* Header */}
             <div className="p-4 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between">
@@ -204,10 +216,10 @@ export const Chatbot: React.FC = () => {
       </AnimatePresence>
 
       {/* Floating Toggle Button */}
-      <Tooltip content={isOpen ? "Close AI Assistant" : "Chat with Aurlets AI Assistant"} position="left">
+      <Tooltip content={isOpen ? "Close AI Assistant" : "Chat/Drag to move AI Assistant"} position="left">
         <motion.button
           onClick={() => setIsOpen(!isOpen)}
-          className={`w-14 h-14 rounded-full flex items-center justify-center transition-all active:scale-90 shadow-2xl relative group ${
+          className={`w-14 h-14 rounded-full flex items-center justify-center transition-all active:scale-90 shadow-2xl relative group cursor-grab active:cursor-grabbing ${
             isOpen
               ? 'bg-zinc-900 border border-zinc-800 text-zinc-200'
               : 'bg-gradient-to-tr from-purple-600 to-indigo-600 text-white shadow-purple-600/20'
@@ -225,6 +237,6 @@ export const Chatbot: React.FC = () => {
           )}
         </motion.button>
       </Tooltip>
-    </div>
+    </motion.div>
   );
 };

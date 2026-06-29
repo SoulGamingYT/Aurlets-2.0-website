@@ -983,7 +983,8 @@ export function startDiscordBot(
       'reset',
       'purge',
       'puzzle',
-      'giveaway', 'giveaways'
+      'giveaway', 'giveaways',
+      'rps'
     ]);
 
     if (!VALID_COMMANDS.has(commandName)) return;
@@ -1070,34 +1071,128 @@ export function startDiscordBot(
     // 1. HELP COMMAND
     // ==========================================
     if (commandName === 'help' || commandName === 'commands') {
-      const description = `Welcome to **Aurlets Economy System**! Here are the commands you can play directly from Discord. Any points you earn are **instantly updated** on the website!\n\n` +
-        `🪙 **Games & Gambling:**\n` +
-        `• \`+cf <amount> [heads/tails]\` - Bet your AP on a coin flip. Capped at 10k/bet. (e.g. \`+cf 50 heads\`)\n` +
-        `• \`+bj <amount>\` - Play Blackjack against the Dealer using buttons! Capped at 10k/bet. (e.g. \`+bj 100\`)\n` +
-        `• \`+slots <amount>\` - Spin the slot machine for big wins! Capped at 10k/bet. (e.g. \`+slots 50\`)\n` +
-        `• \`+puzzle deposit\` - Deposit an attached image (or reply to one) as a custom slide puzzle image!\n\n` +
-        `💸 **Earning AP:**\n` +
-        `• \`+beg\` - Beg generous strangers for pocket points (5 min cooldown).\n` +
-        `• \`+work\` - Work funny jobs around the server to make a salary (30 min cooldown).\n` +
-        `• \`+daily\` - Claim your daily reward of up to **10 AP** (only 1 claim per 24h shared between Web and Discord!).\n\n` +
-        `🛍️ **Reward Shop & Custom Roles:**\n` +
-        `• \`+shop\` - View roles and items available in the Reward Shop.\n` +
-        `• \`+buy <number/name>\` - Buy a server role from the Shop (e.g. \`+buy 1\`)\n` +
-        `• \`+redeem <code>\` - Redeem a promo/rewards code for Aura Points (e.g. \`+redeem AURLETS100\`)\n` +
-        `• \`+customrole\` (or \`+cr\`) - Get the direct link to configure/buy your premium Custom Discord Role!\n` +
-        `• \`+website\` (or \`+web\`, \`+site\`) - Get the official link to the Aurlets web dashboard!\n\n` +
-        `📊 **User & Rankings:**\n` +
-        `• \`+bal [user]\` - Check your points balance and streak. Mention a user to check theirs!\n` +
-        `• \`+profile [user]\` - View detailed Aurlets player profile including streak, time on website, and invites.\n` +
-        `• \`+give <@user> <amount>\` - Safe points transfer to another user. (e.g. \`+give @user 50\`)\n` +
-        `• \`+leaderboard\` (or \`+lb\`) - Show Top 10 Aurlets Players.\n\n` +
-        `🛡️ **Admin & Moderation Commands:**\n` +
-        `• \`+add <@user> <amount>\` - Add points to a user (Admin Only).\n` +
-        `• \`+remove <@user> <amount>\` - Remove points from a user (Admin Only).\n` +
-        `• \`+set <@user> <amount>\` - Set exact points for a user (Admin Only).\n` +
-        `• \`+reset <@user>\` - Reset a user's points & streak to 0 (Admin Only).\n` +
-        `• \`+purge <quantity>\` / \`+purge <@user/humans/bots> <quantity>\` - Delete messages from a channel (Manage Messages permission required).`;
-      return sendEmbed('📋 Aurlets Economy Bot Instructions', description, 3447003);
+      const embedMain = new EmbedBuilder()
+        .setTitle('📋 Aurlets Economy Bot Instructions')
+        .setDescription(
+          `Welcome to **Aurlets Economy System**! Here you can play mini-games directly from Discord. Any points you earn are **instantly updated** on the website!\n\n` +
+          `Click on the buttons below to view the detailed commands for each category:\n\n` +
+          `🪙 **Category 1: Games & Gambling**\n` +
+          `💸 **Category 2: AP Earnings & Shop**\n` +
+          `📊 **Category 3: User Profiles & Transfers**\n` +
+          `🛡️ **Category 4: Admin Panel & Tools**\n`
+        )
+        .setColor(3447003)
+        .setTimestamp()
+        .setFooter({ text: 'Use the buttons below to navigate', iconURL: client.user?.displayAvatarURL() });
+
+      const btnGames = new ButtonBuilder()
+        .setCustomId('help_games')
+        .setLabel('🪙 Games')
+        .setStyle(ButtonStyle.Primary);
+
+      const btnEarnings = new ButtonBuilder()
+        .setCustomId('help_earnings')
+        .setLabel('💸 Earnings')
+        .setStyle(ButtonStyle.Success);
+
+      const btnUser = new ButtonBuilder()
+        .setCustomId('help_user')
+        .setLabel('📊 User Info')
+        .setStyle(ButtonStyle.Secondary);
+
+      const btnAdmin = new ButtonBuilder()
+        .setCustomId('help_admin')
+        .setLabel('🛡️ Admin Tools')
+        .setStyle(ButtonStyle.Danger);
+
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(btnGames, btnEarnings, btnUser, btnAdmin);
+
+      const helpMsg = await message.reply({ embeds: [embedMain], components: [row] });
+
+      const collector = helpMsg.createMessageComponentCollector({
+        componentType: ComponentType.Button,
+        time: 120000 // 2 minutes
+      });
+
+      collector.on('collect', async (interaction) => {
+        if (interaction.user.id !== authorId) {
+          await interaction.reply({ content: '❌ Run `+help` to navigate yourself!', ephemeral: true });
+          return;
+        }
+
+        let categoryTitle = '';
+        let categoryDesc = '';
+        let categoryColor = 3447003;
+
+        if (interaction.customId === 'help_games') {
+          categoryTitle = '🪙 Games & Gambling Commands';
+          categoryColor = 3447003; // Blue
+          categoryDesc = 
+            `• \`+cf <amount> [heads/tails]\` - Bet your AP on a coin flip. Capped at 10k/bet. (e.g. \`+cf 50 heads\`)\n` +
+            `• \`+bj <amount>\` - Play Blackjack against the Dealer using buttons! Capped at 10k/bet. (e.g. \`+bj 100\`)\n` +
+            `• \`+slots <amount>\` - Spin the slot machine for big wins! Capped at 10k/bet. (e.g. \`+slots 50\`)\n` +
+            `• \`+rps <rock/paper/scissors> [betAmount]\` - Play Rock Paper Scissors against the bot! (Aliases: \`r\`/\`p\`/\`s\`) (e.g. \`+rps rock 50\`)\n` +
+            `• \`+puzzle deposit\` - Deposit an attached image (or reply to one) as a custom slide puzzle image!`;
+        } else if (interaction.customId === 'help_earnings') {
+          categoryTitle = '💸 AP Earnings & Shop Commands';
+          categoryColor = 3066993; // Green
+          categoryDesc =
+            `• \`+beg\` - Beg generous strangers for pocket points (30s cooldown).\n` +
+            `• \`+work\` - Work funny jobs around the server to make a salary (120s cooldown).\n` +
+            `• \`+daily\` - Claim your daily reward of up to **10 AP** (only 1 claim per 24h shared between Web and Discord!).\n` +
+            `• \`+shop\` - View roles and items available in the Reward Shop.\n` +
+            `• \`+buy <number/name>\` - Buy a server role from the Shop (e.g. \`+buy 1\`)\n` +
+            `• \`+redeem <code>\` - Redeem a promo/rewards code for Aura Points or Vouchers (e.g. \`+redeem AURLETS100\`)\n` +
+            `• \`+customrole\` (or \`+cr\`) - Get the direct link to configure/buy your premium Custom Discord Role!\n` +
+            `• \`+website\` (or \`+web\`, \`+site\`) - Get the official link to the Aurlets web dashboard!`;
+        } else if (interaction.customId === 'help_user') {
+          categoryTitle = '📊 User Profiles & Transfers';
+          categoryColor = 10181046; // Purple
+          categoryDesc =
+            `• \`+bal [user]\` - Check your points balance and streak. Mention a user to check theirs!\n` +
+            `• \`+profile [user]\` - View detailed Aurlets player profile including streak, time on website, and invites.\n` +
+            `• \`+give <@user> <amount>\` - Safe points transfer to another user. (e.g. \`+give @user 50\`)\n` +
+            `• \`+leaderboard\` (or \`+lb\`) - Show Top 10 Aurlets Players.`;
+        } else if (interaction.customId === 'help_admin') {
+          categoryTitle = '🛡️ Admin & Moderation Tools';
+          categoryColor = 15158332; // Red
+          categoryDesc =
+            `• \`+add <@user> <amount>\` - Add points to a user (Admin Only).\n` +
+            `• \`+remove <@user> <amount>\` - Remove points from a user (Admin Only).\n` +
+            `• \`+set <@user> <amount>\` - Set exact points for a user (Admin Only).\n` +
+            `• \`+reset <@user>\` - Reset a user's points & streak to 0 (Admin Only).\n` +
+            `• \`+purge <quantity>\` / \`+purge <@user/humans/bots> <quantity>\` - Delete messages from a channel (Manage Messages permission required).`;
+        }
+
+        const embedUpdated = new EmbedBuilder()
+          .setTitle(categoryTitle)
+          .setDescription(categoryDesc)
+          .setColor(categoryColor)
+          .setTimestamp()
+          .setFooter({ text: 'Use the buttons below to switch categories', iconURL: client.user?.displayAvatarURL() });
+
+        await interaction.update({ embeds: [embedUpdated] });
+      });
+
+      collector.on('end', async () => {
+        // Disable buttons when collector ends
+        const disabledBtnGames = ButtonBuilder.from(btnGames).setDisabled(true);
+        const disabledBtnEarnings = ButtonBuilder.from(btnEarnings).setDisabled(true);
+        const disabledBtnUser = ButtonBuilder.from(btnUser).setDisabled(true);
+        const disabledBtnAdmin = ButtonBuilder.from(btnAdmin).setDisabled(true);
+        const disabledRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+          disabledBtnGames,
+          disabledBtnEarnings,
+          disabledBtnUser,
+          disabledBtnAdmin
+        );
+        try {
+          await helpMsg.edit({ components: [disabledRow] });
+        } catch (err) {
+          // ignore if message deleted
+        }
+      });
+      return;
     }
 
     // ==========================================
@@ -1245,10 +1340,10 @@ export function startDiscordBot(
     }
 
     // ==========================================
-    // 4. BEG COMMAND (5 min cooldown)
+    // 4. BEG COMMAND (30 seconds cooldown)
     // ==========================================
     if (commandName === 'beg') {
-      const cdLeft = checkCooldown('beg', 300000); // 5 minutes
+      const cdLeft = checkCooldown('beg', 30000); // 30 seconds
       if (cdLeft > 0) {
         const mins = Math.floor(cdLeft / 60000);
         const secs = Math.ceil((cdLeft % 60000) / 1000);
@@ -1284,14 +1379,15 @@ export function startDiscordBot(
     }
 
     // ==========================================
-    // 5. WORK COMMAND (30 mins cooldown)
+    // 5. WORK COMMAND (120 seconds cooldown)
     // ==========================================
     if (commandName === 'work') {
-      const cdLeft = checkCooldown('work', 1800000); // 30 minutes
+      const cdLeft = checkCooldown('work', 120000); // 120 seconds
       if (cdLeft > 0) {
         const mins = Math.floor(cdLeft / 60000);
         const secs = Math.ceil((cdLeft % 60000) / 1000);
-        return sendError(`⏳ Take a break! You are working yourself to the bone. Wait **${mins}m ${secs}s** before your next shift.`);
+        const timeStr = mins > 0 ? `**${mins}m ${secs}s**` : `**${secs} seconds**`;
+        return sendError(`⏳ Take a break! You are working yourself to the bone. Wait **${timeStr}** before your next shift.`);
       }
 
       const salary = Math.floor(Math.random() * 36) + 15; // 15 to 50 AP
@@ -1384,6 +1480,115 @@ export function startDiscordBot(
       saveData();
 
       return sendEmbed(won ? '🪙 Coinflip Won!' : '🪙 Coinflip Lost', outputText, color);
+    }
+
+    // ==========================================
+    // RPS COMMAND
+    // ==========================================
+    if (commandName === 'rps') {
+      let choice = args[0]?.toLowerCase();
+      const betStr = args[1];
+
+      if (!choice) {
+        return sendError('❌ Usage: `+rps [rock/paper/scissors] [betAmount]`\nOr use aliases: `r` / `p` / `s`');
+      }
+
+      // map choice
+      if (choice === 'r') choice = 'rock';
+      if (choice === 'p') choice = 'paper';
+      if (choice === 's') choice = 'scissors';
+
+      const validChoices = ['rock', 'paper', 'scissors'];
+      if (!validChoices.includes(choice)) {
+        return sendError('❌ Invalid choice! Choose: `rock` (r), `paper` (p), or `scissors` (s).');
+      }
+
+      let bet = 0;
+      if (betStr) {
+        const parsedBet = parseBetAmount(betStr, farmer.points);
+        if (parsedBet === 'invalid') {
+          return sendError('Please provide a valid betting amount or type `all`.');
+        } else if (parsedBet !== 'missing') {
+          bet = parsedBet as number;
+        }
+      }
+
+      if (bet > 0) {
+        if (bet < 5) {
+          return sendError('Minimum bet is **5 Aura Points (AP)**.');
+        }
+        if (bet > 10000) {
+          return sendError('Maximum bet is **10,000 Aura Points (AP)** at a time.');
+        }
+        if (farmer.points < bet) {
+          return sendError(`Insufficient points! You tried to bet **${bet} AP** but only have **${farmer.points} AP**.`);
+        }
+      }
+
+      let limits: any = null;
+      if (bet > 0) {
+        limits = checkDailyEarningsLimit(farmer.name, bet);
+        if (!limits.allowed) {
+          return sendError('You have reached your daily maximum betting earnings limit of **5000 AP** on the web/discord! Try again tomorrow.');
+        }
+      }
+
+      const botChoices = ['rock', 'paper', 'scissors'];
+      const botChoice = botChoices[Math.floor(Math.random() * botChoices.length)];
+
+      let result: 'win' | 'lose' | 'tie' = 'tie';
+      if (choice === botChoice) {
+        result = 'tie';
+      } else if (
+        (choice === 'rock' && botChoice === 'scissors') ||
+        (choice === 'paper' && botChoice === 'rock') ||
+        (choice === 'scissors' && botChoice === 'paper')
+      ) {
+        result = 'win';
+      } else {
+        result = 'lose';
+      }
+
+      const choiceEmojis: Record<string, string> = {
+        rock: '🪨 Rock',
+        paper: '📄 Paper',
+        scissors: '✂️ Scissors'
+      };
+
+      let description = `You chose **${choiceEmojis[choice]}**\nBot chose **${choiceEmojis[botChoice]}**\n\n`;
+      let title = '';
+      let color = 10181046; // Purple
+
+      if (result === 'tie') {
+        title = '👔 RPS Draw';
+        description += `It's a draw! No AP was lost or gained.`;
+        color = 16776960; // Yellow
+      } else if (result === 'win') {
+        title = '🎉 RPS Victory!';
+        if (bet > 0) {
+          const gain = limits ? limits.capGain : bet;
+          farmer.points += gain;
+          commitDailyEarnings(farmer.name, gain);
+          const limitCappedText = (gain < bet) ? ` (Capped by 5000 daily earnings limit!)` : '';
+          description += `You won the match and won **+${gain} AP**!${limitCappedText}\n👛 New Balance: **${farmer.points} AP**`;
+        } else {
+          description += `You won the match! (For Fun)`;
+        }
+        color = 3066993; // Green
+      } else {
+        title = '💔 RPS Defeat';
+        if (bet > 0) {
+          farmer.points = Math.max(0, farmer.points - bet);
+          description += `You lost the match and lost **-${bet} AP**.\n👛 New Balance: **${farmer.points} AP**`;
+        } else {
+          description += `You lost the match! (For Fun)`;
+        }
+        color = 15158332; // Red
+      }
+
+      farmer.lastActive = Date.now();
+      saveData();
+      return sendEmbed(title, description, color);
     }
 
     // ==========================================
