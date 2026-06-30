@@ -257,7 +257,8 @@ export function startDiscordBot(
     createdAt: number;
   }>,
   giveaways?: Giveaway[],
-  vaultState?: { balance: number }
+  vaultState?: { balance: number },
+  heistTeams?: Record<string, { name: string; leader: string; members: string[]; createdAt: number }>
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
@@ -988,7 +989,10 @@ export function startDiscordBot(
       'purge',
       'puzzle',
       'giveaway', 'giveaways',
-      'rps'
+      'rps',
+      'deposit', 'withdraw',
+      'rob', 'steal',
+      'team', 'heist', 'vault'
     ]);
 
     if (!VALID_COMMANDS.has(commandName)) return;
@@ -2468,6 +2472,599 @@ export function startDiscordBot(
         `🔗 **Read More:** [View full Announcement Board on Website](${webLink}/announcements)`;
 
       return sendEmbed('📢 Latest Server Update & News', desc, 10181046); // Purple
+    }
+
+    // ==========================================
+    // 14.7.1 DEPOSIT COMMAND
+    // ==========================================
+    if (commandName === 'deposit') {
+      const amountStr = args[0];
+      if (!amountStr) {
+        return sendError('Please specify an amount to deposit (e.g. `+deposit 100` or `+deposit all`).');
+      }
+
+      const walletPoints = farmer.points || 0;
+      const bankBal = farmer.bankBalance || 0;
+
+      let transactionVal = 0;
+      if (amountStr.toLowerCase() === 'all') {
+        transactionVal = walletPoints;
+      } else {
+        transactionVal = parseInt(amountStr, 10);
+      }
+
+      if (isNaN(transactionVal) || transactionVal <= 0) {
+        return sendError('Please enter a valid positive number or "all".');
+      }
+      if (walletPoints < transactionVal) {
+        return sendError(`Insufficient wallet balance! You only have **${walletPoints} AP**.`);
+      }
+
+      farmer.points = walletPoints - transactionVal;
+      farmer.bankBalance = bankBal + transactionVal;
+      saveData();
+
+      return sendEmbed(
+        '🏦 Bank Deposit',
+        `Deposited **${transactionVal} AP** into your secure bank account!\n` +
+        `• Bank Balance: **${farmer.bankBalance} AP**\n` +
+        `• Wallet Balance: **${farmer.points} AP**`,
+        3066993 // Green
+      );
+    }
+
+    // ==========================================
+    // 14.7.2 WITHDRAW COMMAND
+    // ==========================================
+    if (commandName === 'withdraw') {
+      const amountStr = args[0];
+      if (!amountStr) {
+        return sendError('Please specify an amount to withdraw (e.g. `+withdraw 100` or `+withdraw all`).');
+      }
+
+      const walletPoints = farmer.points || 0;
+      const bankBal = farmer.bankBalance || 0;
+
+      let transactionVal = 0;
+      if (amountStr.toLowerCase() === 'all') {
+        transactionVal = bankBal;
+      } else {
+        transactionVal = parseInt(amountStr, 10);
+      }
+
+      if (isNaN(transactionVal) || transactionVal <= 0) {
+        return sendError('Please enter a valid positive number or "all".');
+      }
+      if (bankBal < transactionVal) {
+        return sendError(`Insufficient bank balance! You only have **${bankBal} AP** in your secure bank account.`);
+      }
+
+      farmer.points = walletPoints + transactionVal;
+      farmer.bankBalance = bankBal - transactionVal;
+      saveData();
+
+      return sendEmbed(
+        '💸 Bank Withdrawal',
+        `Withdrew **${transactionVal} AP** from your secure bank account!\n` +
+        `• Bank Balance: **${farmer.bankBalance} AP**\n` +
+        `• Wallet Balance: **${farmer.points} AP**`,
+        3066993 // Green
+      );
+    }
+
+    // ==========================================
+    // 14.7.3 ROB / STEAL COMMAND
+    // ==========================================
+    if (commandName === 'rob' || commandName === 'steal') {
+      const mentionedUser = message.mentions.users.first();
+      if (!mentionedUser) {
+        return sendError('Please mention a user to rob (e.g. `+rob @username`).');
+      }
+
+      if (mentionedUser.id === authorId) {
+        return sendError('You cannot rob yourself!');
+      }
+
+      const targetFarmer = getOrCreateFarmerByDiscord(mentionedUser.id, mentionedUser.username);
+
+      const now = Date.now();
+      const cooldownPeriod = 30 * 60 * 1000; // 30 mins cooldown
+      const lastRob = farmer.robCooldown || 0;
+
+      if (now - lastRob < cooldownPeriod) {
+        const remainingSecs = Math.ceil((cooldownPeriod - (now - lastRob)) / 1000);
+        const remainingMins = Math.ceil(remainingSecs / 60);
+        return sendError(`Your hands are still shaking! You can rob again in **${remainingMins} minutes**.`);
+      }
+
+      const targetPoints = targetFarmer.points || 0;
+      if (targetPoints < 10) {
+        return sendError(`**${targetFarmer.name}** is too poor to be robbed (has less than 10 AP in wallet).`);
+      }
+
+      farmer.robCooldown = now;
+
+      const success = Math.random() < 0.45;
+      if (success) {
+        const pct = 0.20 + Math.random() * 0.10;
+        const stolen = Math.floor(targetPoints * pct);
+
+        targetFarmer.points = targetPoints - stolen;
+        farmer.points = (farmer.points || 0) + stolen;
+        saveData();
+
+        return sendEmbed(
+          '⚔️ Robbery Successful!',
+          `You snuck up on **${targetFarmer.name}** and stole **${stolen} AP** from their wallet! 💰\n` +
+          `*Note: Always secure your AP in the bank!*`,
+          3066993 // Green
+        );
+      } else {
+        const penalty = Math.min(farmer.points || 0, Math.max(50, Math.floor((farmer.points || 0) * 0.10)));
+        farmer.points = Math.max(0, (farmer.points || 0) - penalty);
+        targetFarmer.points = targetPoints + penalty;
+        saveData();
+
+        return sendEmbed(
+          '🚨 Busted!',
+          `You tried to pickpocket **${targetFarmer.name}** but tripped over a trash can! You dropped **${penalty} AP** which was pocketed by **${targetFarmer.name}** as hush money. 🚔`,
+          15158332 // Red
+        );
+      }
+    }
+
+    // ==========================================
+    // 14.7.4 TEAM COMMAND
+    // ==========================================
+    if (commandName === 'team') {
+      const activeHeistTeams = heistTeams || {};
+      const subcommand = args[0]?.toLowerCase();
+
+      if (!subcommand) {
+        return sendError(
+          '❌ Invalid usage!\n' +
+          '• `+team create <teamName>` - Create a heist team\n' +
+          '• `+team invite <@user>` - Invite a user to your team\n' +
+          '• `+team remove <@user>` - Remove a user from your team\n' +
+          '• `+team delete <teamName>` - Delete your team\n' +
+          '• `+heist list` - See active heist teams'
+        );
+      }
+
+      const now = Date.now();
+      // Clean expired teams (> 1 hour)
+      for (const key of Object.keys(activeHeistTeams)) {
+        if (now - activeHeistTeams[key].createdAt > 3600000) {
+          delete activeHeistTeams[key];
+        }
+      }
+
+      const callerName = farmer.name;
+
+      // 1. TEAM CREATE
+      if (subcommand === 'create') {
+        const teamNameArgs = args.slice(1).join(' ');
+        if (!teamNameArgs || teamNameArgs.trim().length < 3) {
+          return sendError('Provide a valid team name (at least 3 characters). e.g. `+team create Golden Crew`');
+        }
+
+        const cleanTeam = teamNameArgs.trim();
+        if (activeHeistTeams[cleanTeam.toLowerCase()]) {
+          return sendError(`A team with name "${cleanTeam}" already exists.`);
+        }
+
+        const existing = Object.values(activeHeistTeams).find(t => 
+          t.leader.toLowerCase() === callerName.toLowerCase() || 
+          t.members.some(m => m.toLowerCase() === callerName.toLowerCase())
+        );
+
+        if (existing) {
+          return sendError(`You are already in an active team: **${existing.name}**.`);
+        }
+
+        activeHeistTeams[cleanTeam.toLowerCase()] = {
+          name: cleanTeam,
+          leader: callerName,
+          members: [callerName],
+          createdAt: Date.now()
+        };
+
+        return sendEmbed(
+          '⚔️ Heist Team Created',
+          `Team **${cleanTeam}** created successfully!\n` +
+          `• **Leader:** ${callerName}\n` +
+          `• **Members:** ${callerName}\n\n` +
+          `Invite members using \`+team invite @user\`. (Max 5 members)\n` +
+          `When your crew is ready, run \`+heist vault\`! (Costs 200 AP per person)`,
+          3066993 // Green
+        );
+      }
+
+      // Find team for caller
+      const team = Object.values(activeHeistTeams).find(t => 
+        t.leader.toLowerCase() === callerName.toLowerCase() || 
+        t.members.some(m => m.toLowerCase() === callerName.toLowerCase())
+      );
+
+      // 2. TEAM INVITE
+      if (subcommand === 'invite') {
+        if (!team) {
+          return sendError('You are not in any active heist team! Create one first using `+team create <name>`.');
+        }
+
+        if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+          return sendError('Only the team leader can invite members.');
+        }
+
+        if (team.members.length >= 5) {
+          return sendError('Team is full (maximum 5 members).');
+        }
+
+        const mentionedUser = message.mentions.users.first();
+        if (!mentionedUser) {
+          return sendError('Please mention a user to invite (e.g. `+team invite @username`).');
+        }
+
+        const targetFarmer = getOrCreateFarmerByDiscord(mentionedUser.id, mentionedUser.username);
+
+        // Check if target is already in some team
+        const targetInTeam = Object.values(activeHeistTeams).some(t => 
+          t.leader.toLowerCase() === targetFarmer.name.toLowerCase() || 
+          t.members.some(m => m.toLowerCase() === targetFarmer.name.toLowerCase())
+        );
+
+        if (targetInTeam) {
+          return sendError(`**${targetFarmer.name}** is already in another heist crew.`);
+        }
+
+        team.members.push(targetFarmer.name);
+
+        return sendEmbed(
+          '🎉 Team Member Invited',
+          `Successfully added **${targetFarmer.name}** to crew **${team.name}**!\n` +
+          `• **Crew Members:** ${team.members.join(', ')}`,
+          3066993
+        );
+      }
+
+      // 3. TEAM REMOVE
+      if (subcommand === 'remove') {
+        if (!team) {
+          return sendError('You are not in any active heist team!');
+        }
+
+        if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+          return sendError('Only the team leader can remove members.');
+        }
+
+        const mentionedUser = message.mentions.users.first();
+        if (!mentionedUser) {
+          return sendError('Please mention a member to remove (e.g. `+team remove @username`).');
+        }
+
+        const targetFarmer = getOrCreateFarmerByDiscord(mentionedUser.id, mentionedUser.username);
+
+        if (targetFarmer.name.toLowerCase() === team.leader.toLowerCase()) {
+          return sendError('You cannot remove yourself as leader. Use `+team delete` to disband.');
+        }
+
+        const originalLen = team.members.length;
+        team.members = team.members.filter(m => m.toLowerCase() !== targetFarmer.name.toLowerCase());
+
+        if (team.members.length === originalLen) {
+          return sendError(`**${targetFarmer.name}** is not in your team.`);
+        }
+
+        return sendEmbed(
+          '❌ Member Removed',
+          `Removed **${targetFarmer.name}** from crew.\n` +
+          `• **Members Left:** ${team.members.join(', ')}`,
+          15158332
+        );
+      }
+
+      // 4. TEAM DELETE / DISBAND
+      if (subcommand === 'delete' || subcommand === 'disband') {
+        if (!team) {
+          return sendError('You are not in any active heist team!');
+        }
+
+        if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+          return sendError('Only the team leader can disband this team.');
+        }
+
+        delete activeHeistTeams[team.name.toLowerCase()];
+
+        return sendEmbed(
+          '🗑️ Team Disbanded',
+          `Disbanded the team crew **${team.name}**. All members have been released from their roles.`,
+          15158332
+        );
+      }
+
+      return sendError('Unknown team subcommand. Use `create`, `invite`, `remove`, or `delete`.');
+    }
+
+    // ==========================================
+    // 14.7.5 HEIST COMMAND
+    // ==========================================
+    if (commandName === 'heist') {
+      const activeHeistTeams = heistTeams || {};
+      const subcommand = args[0]?.toLowerCase();
+
+      if (!subcommand) {
+        return sendError(
+          '❌ Invalid heist usage!\n' +
+          '• `+heist list` - View active heist crews & current Server Vault balance\n' +
+          '• `+heist vault` - Initiate the heist with your active team crew (Costs 200 AP per person)'
+        );
+      }
+
+      const now = Date.now();
+      // Clean expired teams (> 1 hour)
+      for (const key of Object.keys(activeHeistTeams)) {
+        if (now - activeHeistTeams[key].createdAt > 3600000) {
+          delete activeHeistTeams[key];
+        }
+      }
+
+      // 1. HEIST LIST
+      if (subcommand === 'list') {
+        const vaultBal = vaultState?.balance || 0;
+        const crews = Object.values(activeHeistTeams);
+
+        if (crews.length === 0) {
+          return sendEmbed(
+            '🔍 Heist Status Board',
+            `🏢 **SERVER VAULT BALANCE:** **${vaultBal} AP**\n\n` +
+            `❌ **Active Heist Teams:** None currently registered.\n` +
+            `👉 Use \`+team create <name>\` to form a crew and prepare to heist the server vault!`,
+            3447003 // Cyan
+          );
+        }
+
+        const lines = crews.map(t => {
+          const ageMins = Math.floor((Date.now() - t.createdAt) / 60000);
+          return `• **${t.name}** (Leader: \`${t.leader}\`) - Members: ${t.members.join(', ')} [Active: ${ageMins}m / 60m]`;
+        });
+
+        return sendEmbed(
+          '🔍 Heist Status Board',
+          `🏢 **SERVER VAULT BALANCE:** **${vaultBal} AP**\n\n` +
+          `👥 **Active Heist Teams:**\n${lines.join('\n')}\n\n` +
+          `*To start a heist, form a team and run \`+heist vault\`! It costs 200 AP per team member.*`,
+          3447003 // Cyan
+        );
+      }
+
+      // 2. HEIST VAULT
+      if (subcommand === 'vault') {
+        const callerName = farmer.name;
+        const team = Object.values(activeHeistTeams).find(t => 
+          t.leader.toLowerCase() === callerName.toLowerCase() || 
+          t.members.some(m => m.toLowerCase() === callerName.toLowerCase())
+        );
+
+        if (!team) {
+          return sendError('You are not in any active heist team! Create one first using `+team create <name>`.');
+        }
+
+        if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+          return sendError('Only the team leader can initiate the vault heist!');
+        }
+
+        const heistCost = 200;
+        const brokeMembers: string[] = [];
+
+        // Validate points
+        team.members.forEach(m => {
+          const f = Object.values(farmers).find(f => f.name.toLowerCase() === m.toLowerCase());
+          if (!f || (f.points || 0) < heistCost) {
+            brokeMembers.push(m);
+          }
+        });
+
+        if (brokeMembers.length > 0) {
+          return sendError(`The heist cannot proceed! These crew members do not have **200 AP** in their wallets: **${brokeMembers.join(', ')}**.`);
+        }
+
+        // Deduct fees
+        team.members.forEach(m => {
+          const f = Object.values(farmers).find(f => f.name.toLowerCase() === m.toLowerCase());
+          if (f) {
+            f.points = (f.points || 0) - heistCost;
+          }
+        });
+        saveData();
+
+        const targetCode = Math.floor(Math.random() * 100) + 1;
+        let attemptsLeft = 6;
+        const timeLimitMs = 60000; // 60 seconds
+
+        const introEmbed = new EmbedBuilder()
+          .setTitle('🔒 Vault Security Protocol Triggered!')
+          .setDescription(
+            `🚨 **CRACKING MAIN FRAME...**\n\n` +
+            `Your crew **${team.name}** has bypassed outer perimeter. The safe combination is locked behind a bypass shield!\n\n` +
+            `• Guess the passcode: a number between **1 and 100**\n` +
+            `• You have **${attemptsLeft} attempts** and **60 seconds**!\n` +
+            `• **Any team member** can type a number in this channel to guess!`
+          )
+          .setColor(15844367) // Yellow
+          .setTimestamp();
+
+        const gameMsg = await message.reply({ embeds: [introEmbed] });
+
+        // Create a message collector for guesses
+        const collector = (message.channel as any).createMessageCollector({
+          filter: (m) => {
+            // Only allow team members to guess
+            return team.members.some(mem => mem.toLowerCase() === m.author.username.toLowerCase());
+          },
+          time: timeLimitMs
+        });
+
+        let finished = false;
+
+        collector.on('collect', async (m) => {
+          if (finished) return;
+
+          const guess = parseInt(m.content.trim(), 10);
+          if (isNaN(guess) || guess < 1 || guess > 100) {
+            return; // Ignore invalid guesses silently or respond with a tip
+          }
+
+          attemptsLeft--;
+
+          if (guess === targetCode) {
+            finished = true;
+            collector.stop('success');
+
+            // Heist Success!
+            const vaultBal = vaultState?.balance || 0;
+            const factor = 0.15 + Math.random() * 0.10; // 15-25%
+            let lootedAmount = Math.floor(vaultBal * factor);
+            if (lootedAmount > vaultBal) lootedAmount = vaultBal;
+
+            if (vaultState) {
+              vaultState.balance -= lootedAmount;
+            }
+
+            const sharePerPerson = Math.floor(lootedAmount / team.members.length);
+            team.members.forEach(member => {
+              const f = Object.values(farmers).find(f => f.name.toLowerCase() === member.toLowerCase());
+              if (f) {
+                f.points = (f.points || 0) + sharePerPerson;
+              }
+            });
+
+            delete activeHeistTeams[team.name.toLowerCase()];
+            saveData();
+
+            const winEmbed = new EmbedBuilder()
+              .setTitle('🎯 HEIST SUCCESSFUL! 🎭')
+              .setDescription(
+                `🎉 **SAFE BREACHED!** **${m.author.username}** guessed the exact vault combination: **${targetCode}**!\n\n` +
+                `Your crew **${team.name}** successfully looted **${lootedAmount} AP** from the Server Vault!\n` +
+                `• Split: **${sharePerPerson} AP** has been added to each member's wallet.\n` +
+                `• **Crew members:** ${team.members.join(', ')}`
+              )
+              .setColor(3066993) // Green
+              .setTimestamp();
+
+            await gameMsg.reply({ embeds: [winEmbed] });
+          } else {
+            if (attemptsLeft <= 0) {
+              finished = true;
+              collector.stop('fail_no_attempts');
+
+              delete activeHeistTeams[team.name.toLowerCase()];
+              saveData();
+
+              const failEmbed = new EmbedBuilder()
+                .setTitle('🚨 HEIST FAILED! 🚔')
+                .setDescription(
+                  `🛑 **ALARM TRIGGERED!** You ran out of safe-cracking attempts!\n\n` +
+                  `The secret safe code was **${targetCode}**.\n` +
+                  `Your crew **${team.name}** was caught by the automated laser defenses. Each member has lost their **200 AP** entry fee!`
+                )
+                .setColor(15158332) // Red
+                .setTimestamp();
+
+              await gameMsg.reply({ embeds: [failEmbed] });
+            } else {
+              const hint = guess < targetCode ? 'Too Low 📈' : 'Too High 📉';
+              await m.reply(`❌ **${guess}** is **${hint}**! (*${attemptsLeft} attempts left*)`);
+            }
+          }
+        });
+
+        collector.on('end', async (collected, reason) => {
+          if (finished) return;
+
+          finished = true;
+          delete activeHeistTeams[team.name.toLowerCase()];
+          saveData();
+
+          const timeoutEmbed = new EmbedBuilder()
+            .setTitle('🚨 HEIST FAILED! 🚔')
+            .setDescription(
+              `🛑 **TIMEOUT!** Your crew took too long to decode the vault mainframe (60 seconds exceeded)!\n\n` +
+              `The automated guard backup arrived and you had to escape empty-handed. Each member has lost their **200 AP** entry fee!`
+            )
+            .setColor(15158332) // Red
+            .setTimestamp();
+
+          await gameMsg.reply({ embeds: [timeoutEmbed] });
+        });
+
+        return;
+      }
+
+      return sendError('Unknown heist subcommand. Use `list` or `vault`.');
+    }
+
+    // ==========================================
+    // 14.7.6 VAULT ADMIN COMMAND
+    // ==========================================
+    if (commandName === 'vault') {
+      const isServerAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) ||
+                            authorId === '840560998011502593' ||
+                            authorTag === 'admin';
+
+      if (!isServerAdmin) {
+        return sendError('❌ This command is restricted to server administrators.');
+      }
+
+      const subcommand = args[0]?.toLowerCase();
+      const amountStr = args[1];
+
+      if (!subcommand || !amountStr) {
+        return sendError(
+          '❌ Invalid vault usage!\n' +
+          '• `+vault deposit <amount>` - Add AP to server vault balance\n' +
+          '• `+vault withdraw <amount>` - Deduct AP from server vault balance'
+        );
+      }
+
+      const amount = parseInt(amountStr, 10);
+      if (isNaN(amount) || amount <= 0) {
+        return sendError('Please specify a valid positive number for the vault transaction.');
+      }
+
+      const currentBal = vaultState?.balance || 0;
+
+      if (subcommand === 'deposit') {
+        if (vaultState) {
+          vaultState.balance += amount;
+        }
+        saveData();
+
+        return sendEmbed(
+          '🏢 Server Vault Updated',
+          `Successfully deposited **${amount} AP** into the Server Vault!\n` +
+          `• New Vault Balance: **${vaultState?.balance || 0} AP**`,
+          3066993 // Green
+        );
+      } else if (subcommand === 'withdraw') {
+        if (currentBal < amount) {
+          return sendError(`Insufficient server vault balance! Available: **${currentBal} AP**.`);
+        }
+
+        if (vaultState) {
+          vaultState.balance -= amount;
+        }
+        saveData();
+
+        return sendEmbed(
+          '🏢 Server Vault Updated',
+          `Successfully withdrew **${amount} AP** from the Server Vault!\n` +
+          `• Remaining Vault Balance: **${vaultState?.balance || 0} AP**`,
+          15158332 // Red
+        );
+      }
+
+      return sendError('Unknown vault subcommand. Use `deposit` or `withdraw`.');
     }
 
     // ==========================================

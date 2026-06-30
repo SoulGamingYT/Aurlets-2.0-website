@@ -597,7 +597,7 @@ async function startServer() {
 
   // Start background Discord Gateway bot
   try {
-    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages, giveaways, vaultState);
+    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages, giveaways, vaultState, heistTeams);
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
