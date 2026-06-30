@@ -54,6 +54,9 @@ interface Farmer {
   bankBalance?: number;
   robCooldown?: number;
   dailyLastHeist?: number;
+  lastHeistMonth?: string;
+  heistsThisMonth?: number;
+  extraSpins?: number;
 }
 
 interface Giveaway {
@@ -226,6 +229,18 @@ async function startServer() {
   let discordBotSecret: string = '';
 
   let vaultState = { balance: 100000 };
+  let heistTeams: Record<string, { name: string; leader: string; members: string[]; createdAt: number }> = {};
+  interface UpcomingHeist {
+    id: string;
+    vaultName: string;
+    targetAmount: number;
+    scheduledAt: string;
+  }
+  let upcomingHeists: UpcomingHeist[] = [
+    { id: 'heist-1', vaultName: 'Fort Knox Syndicate', targetAmount: 250000, scheduledAt: '2026-07-02T18:00:00Z' },
+    { id: 'heist-2', vaultName: 'Aurlets Prime Vault', targetAmount: 500000, scheduledAt: '2026-07-09T20:00:00Z' },
+    { id: 'heist-3', vaultName: 'Karachi Central Bank', targetAmount: 750000, scheduledAt: '2026-07-16T19:00:00Z' }
+  ];
   let customRolePrice = 49999;
   let presetRolesPriceList = [
     { id: '1417575135279452221', name: 'Blossom 🌸', emoji: '🌸', price: 2500 },
@@ -265,7 +280,8 @@ async function startServer() {
         customRolePrice,
         presetRolesPriceList,
         dailyUserSpins,
-        serverVault: vaultState.balance
+        serverVault: vaultState.balance,
+        upcomingHeists
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -321,6 +337,7 @@ async function startServer() {
         if (parsed.presetRolesPriceList !== undefined) presetRolesPriceList = parsed.presetRolesPriceList;
         if (parsed.dailyUserSpins) dailyUserSpins = parsed.dailyUserSpins;
         if (parsed.serverVault !== undefined) vaultState.balance = parsed.serverVault;
+        if (parsed.upcomingHeists !== undefined) upcomingHeists = parsed.upcomingHeists;
         if (parsed.dailyTransfers) dailyTransfers = parsed.dailyTransfers;
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
@@ -2439,6 +2456,412 @@ async function startServer() {
     });
   });
 
+  // --- BANKING SYSTEM ENDPOINTS ---
+  app.post('/api/bank/deposit', (req, res) => {
+    const { name, amount } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required.' });
+    const farmer = farmers[name];
+    if (!farmer) return res.status(404).json({ error: 'User not found.' });
+
+    let depAmount = 0;
+    if (amount === 'all') {
+      depAmount = farmer.points;
+    } else {
+      depAmount = parseInt(amount, 10);
+    }
+
+    if (isNaN(depAmount) || depAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid deposit amount.' });
+    }
+    if (farmer.points < depAmount) {
+      return res.status(400).json({ error: 'Insufficient wallet balance.' });
+    }
+
+    farmer.points -= depAmount;
+    farmer.bankBalance = (farmer.bankBalance || 0) + depAmount;
+    saveData();
+
+    res.json({
+      success: true,
+      message: `Successfully deposited ${depAmount} AP into your bank account! 🏦`,
+      points: farmer.points,
+      bankBalance: farmer.bankBalance
+    });
+  });
+
+  app.post('/api/bank/withdraw', (req, res) => {
+    const { name, amount } = req.body;
+    if (!name) return res.status(400).json({ error: 'Name is required.' });
+    const farmer = farmers[name];
+    if (!farmer) return res.status(404).json({ error: 'User not found.' });
+
+    let withAmount = 0;
+    const currentBank = farmer.bankBalance || 0;
+    if (amount === 'all') {
+      withAmount = currentBank;
+    } else {
+      withAmount = parseInt(amount, 10);
+    }
+
+    if (isNaN(withAmount) || withAmount <= 0) {
+      return res.status(400).json({ error: 'Invalid withdrawal amount.' });
+    }
+    if (currentBank < withAmount) {
+      return res.status(400).json({ error: 'Insufficient bank balance.' });
+    }
+
+    farmer.points += withAmount;
+    farmer.bankBalance = currentBank - withAmount;
+    saveData();
+
+    res.json({
+      success: true,
+      message: `Successfully withdrew ${withAmount} AP from your bank! 💸`,
+      points: farmer.points,
+      bankBalance: farmer.bankBalance
+    });
+  });
+
+  // --- VAULT HEIST & TEAMS ENDPOINTS ---
+  app.get('/api/team/info', (req, res) => {
+    const { name } = req.query;
+    // Clean up expired teams (older than 1 hour)
+    const now = Date.now();
+    for (const key of Object.keys(heistTeams)) {
+      if (now - heistTeams[key].createdAt > 3600000) {
+        delete heistTeams[key];
+      }
+    }
+
+    let userTeam = null;
+    if (name) {
+      const qName = (name as string).toLowerCase();
+      userTeam = Object.values(heistTeams).find(t => 
+        t.leader.toLowerCase() === qName || 
+        t.members.some(m => m.toLowerCase() === qName)
+      ) || null;
+    }
+
+    let userHeistsThisMonth = 0;
+    if (name) {
+      const f = farmers[(name as string).toLowerCase()];
+      if (f) {
+        const currentDate = new Date();
+        const currentMonthYear = `${currentDate.getFullYear()}-${currentDate.getMonth()}`;
+        if (f.lastHeistMonth !== currentMonthYear) {
+          f.heistsThisMonth = 0;
+          f.lastHeistMonth = currentMonthYear;
+        }
+        userHeistsThisMonth = f.heistsThisMonth || 0;
+      }
+    }
+
+    res.json({
+      serverVault: vaultState.balance,
+      userTeam,
+      allTeams: Object.values(heistTeams),
+      upcomingHeists: upcomingHeists || [],
+      userHeistsThisMonth
+    });
+  });
+
+  app.post('/api/team/create', (req, res) => {
+    const { teamName, leaderName } = req.body;
+    if (!teamName || !leaderName) {
+      return res.status(400).json({ error: 'Team name and leader name are required.' });
+    }
+    const cleanTeamName = teamName.trim();
+    if (cleanTeamName.length < 3) {
+      return res.status(400).json({ error: 'Team name must be at least 3 characters.' });
+    }
+
+    if (heistTeams[cleanTeamName.toLowerCase()]) {
+      return res.status(400).json({ error: 'A team with this name already exists.' });
+    }
+
+    const inTeam = Object.values(heistTeams).some(t => 
+      t.leader.toLowerCase() === leaderName.toLowerCase() || 
+      t.members.some(m => m.toLowerCase() === leaderName.toLowerCase())
+    );
+    if (inTeam) {
+      return res.status(400).json({ error: 'You are already in an active heist team.' });
+    }
+
+    heistTeams[cleanTeamName.toLowerCase()] = {
+      name: cleanTeamName,
+      leader: leaderName,
+      members: [leaderName],
+      createdAt: Date.now()
+    };
+
+    res.json({
+      success: true,
+      message: `Team "${cleanTeamName}" has been successfully created! ⚔️`,
+      team: heistTeams[cleanTeamName.toLowerCase()]
+    });
+  });
+
+  app.post('/api/team/invite', (req, res) => {
+    const { teamName, leaderName, usernameToInvite } = req.body;
+    if (!teamName || !leaderName || !usernameToInvite) {
+      return res.status(400).json({ error: 'Required fields are missing.' });
+    }
+
+    const team = heistTeams[teamName.toLowerCase()];
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    if (team.leader.toLowerCase() !== leaderName.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the team leader can invite members.' });
+    }
+
+    if (team.members.length >= 5) {
+      return res.status(400).json({ error: 'Maximum team size is 5 members.' });
+    }
+
+    const inviteTarget = Object.keys(farmers).find(k => k.toLowerCase() === usernameToInvite.toLowerCase());
+    if (!inviteTarget) {
+      return res.status(404).json({ error: `User "${usernameToInvite}" does not exist in the server db.` });
+    }
+
+    const targetInTeam = Object.values(heistTeams).some(t => 
+      t.leader.toLowerCase() === inviteTarget.toLowerCase() || 
+      t.members.some(m => m.toLowerCase() === inviteTarget.toLowerCase())
+    );
+    if (targetInTeam) {
+      return res.status(400).json({ error: `${inviteTarget} is already in another team.` });
+    }
+
+    if (team.members.some(m => m.toLowerCase() === inviteTarget.toLowerCase())) {
+      return res.status(400).json({ error: 'User is already in your team.' });
+    }
+
+    team.members.push(farmers[inviteTarget].name);
+
+    res.json({
+      success: true,
+      message: `Successfully added ${farmers[inviteTarget].name} to team "${team.name}"! 🎉`,
+      team
+    });
+  });
+
+  app.post('/api/team/remove', (req, res) => {
+    const { teamName, leaderName, usernameToRemove } = req.body;
+    if (!teamName || !leaderName || !usernameToRemove) {
+      return res.status(400).json({ error: 'Required fields are missing.' });
+    }
+
+    const team = heistTeams[teamName.toLowerCase()];
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    if (team.leader.toLowerCase() !== leaderName.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the team leader can remove members.' });
+    }
+
+    if (usernameToRemove.toLowerCase() === team.leader.toLowerCase()) {
+      return res.status(400).json({ error: 'Leader cannot be removed. Delete the team instead.' });
+    }
+
+    team.members = team.members.filter(m => m.toLowerCase() !== usernameToRemove.toLowerCase());
+
+    res.json({
+      success: true,
+      message: `Removed ${usernameToRemove} from team successfully!`,
+      team
+    });
+  });
+
+  app.post('/api/team/delete', (req, res) => {
+    const { teamName, leaderName } = req.body;
+    if (!teamName || !leaderName) {
+      return res.status(400).json({ error: 'Required fields are missing.' });
+    }
+
+    const team = heistTeams[teamName.toLowerCase()];
+    if (!team) return res.status(404).json({ error: 'Team not found.' });
+
+    if (team.leader.toLowerCase() !== leaderName.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the team leader can delete this team.' });
+    }
+
+    delete heistTeams[teamName.toLowerCase()];
+
+    res.json({
+      success: true,
+      message: `Team "${team.name}" has been successfully disbanded.`
+    });
+  });
+
+  app.post('/api/admin/vault/transaction', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { amount, action } = req.body;
+    const value = parseInt(amount, 10);
+    if (isNaN(value) || value <= 0) {
+      return res.status(400).json({ error: 'Invalid vault transaction amount.' });
+    }
+
+    if (action === 'deposit') {
+      vaultState.balance += value;
+    } else if (action === 'withdraw') {
+      if (vaultState.balance < value) {
+        return res.status(400).json({ error: 'Insufficient vault balance.' });
+      }
+      vaultState.balance -= value;
+    } else {
+      return res.status(400).json({ error: 'Invalid action.' });
+    }
+
+    saveData();
+    res.json({
+      success: true,
+      message: `Admin Vault ${action === 'deposit' ? 'deposit' : 'withdrawal'} of ${value} AP successful!`,
+      serverVault: vaultState.balance
+    });
+  });
+
+  app.post('/api/admin/heist/schedule', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { vaultName, targetAmount, scheduledAt } = req.body;
+    if (!vaultName || !targetAmount || !scheduledAt) {
+      return res.status(400).json({ error: 'Vault name, target amount, and schedule date/time are required.' });
+    }
+    const amount = parseInt(targetAmount, 10);
+    if (isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid target amount.' });
+    }
+
+    const newHeist = {
+      id: 'heist_' + Date.now(),
+      vaultName,
+      targetAmount: amount,
+      scheduledAt
+    };
+
+    if (!upcomingHeists) upcomingHeists = [];
+    upcomingHeists.push(newHeist);
+    saveData();
+
+    res.json({
+      success: true,
+      message: `Successfully scheduled upcoming heist: "${vaultName}" for ${scheduledAt}! 🎯`,
+      upcomingHeists
+    });
+  });
+
+  app.post('/api/admin/heist/unschedule', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { id } = req.body;
+    if (!id) {
+      return res.status(400).json({ error: 'Upcoming Heist ID is required.' });
+    }
+
+    upcomingHeists = upcomingHeists.filter(h => h.id !== id);
+    saveData();
+
+    res.json({
+      success: true,
+      message: 'Heist unscheduled successfully.',
+      upcomingHeists
+    });
+  });
+
+  app.post('/api/heist/execute', (req, res) => {
+    const { teamName, playerName, success, performanceScore } = req.body;
+    if (!teamName || !playerName) {
+      return res.status(400).json({ error: 'Team name and player name are required.' });
+    }
+
+    const team = heistTeams[teamName.toLowerCase()];
+    if (!team) return res.status(404).json({ error: 'Heist team not found or expired.' });
+
+    if (team.leader.toLowerCase() !== playerName.toLowerCase()) {
+      return res.status(403).json({ error: 'Only the team leader can submit heist outcomes.' });
+    }
+
+    const heistCost = 200;
+    const currentDate = new Date();
+    const currentMonthYear = `${currentDate.getFullYear()}-${currentDate.getMonth()}`;
+
+    const invalidMembers: string[] = [];
+    const overLimitMembers: string[] = [];
+
+    team.members.forEach(member => {
+      const f = farmers[member.toLowerCase()];
+      if (!f) return;
+      
+      // Check monthly heist limits
+      if (f.lastHeistMonth !== currentMonthYear) {
+        f.heistsThisMonth = 0;
+        f.lastHeistMonth = currentMonthYear;
+      }
+      if ((f.heistsThisMonth || 0) >= 5) {
+        overLimitMembers.push(`${f.name} (${f.heistsThisMonth}/5 heists)`);
+      }
+
+      if (f.points < heistCost) {
+        invalidMembers.push(f.name);
+      }
+    });
+
+    if (overLimitMembers.length > 0) {
+      return res.status(400).json({ error: `The heist cannot start! These crew members have reached their monthly limit of 5 heists: ${overLimitMembers.join(', ')}` });
+    }
+
+    if (invalidMembers.length > 0) {
+      return res.status(400).json({ error: `The heist cannot start! These members do not have ${heistCost} AP in their wallet: ${invalidMembers.join(', ')}` });
+    }
+
+    // Deduct 200 AP from each member and increment heist count
+    team.members.forEach(member => {
+      const f = farmers[member.toLowerCase()];
+      if (f) {
+        f.points -= heistCost;
+        f.heistsThisMonth = (f.heistsThisMonth || 0) + 1;
+        f.lastHeistMonth = currentMonthYear;
+      }
+    });
+
+    let lootedAmount = 0;
+    let sharePerPerson = 0;
+    let heistMessage = '';
+
+    if (success) {
+      const factor = 0.15 + (Math.min(100, performanceScore || 50) / 100) * 0.10;
+      lootedAmount = Math.floor(vaultState.balance * factor);
+      if (lootedAmount > vaultState.balance) lootedAmount = vaultState.balance;
+
+      vaultState.balance -= lootedAmount;
+      sharePerPerson = Math.floor(lootedAmount / team.members.length);
+
+      team.members.forEach(member => {
+        const f = farmers[member];
+        if (f) {
+          f.points += sharePerPerson;
+        }
+      });
+
+      heistMessage = `🎯 SUCCESS! The team cracked the Vault safe perfectly and looted ${lootedAmount} AP! Each of the ${team.members.length} members gets ${sharePerPerson} AP deposited to their wallets! 🎉`;
+    } else {
+      heistMessage = `🚨 CAUGHT! The alarm triggered during safe crack! The heist failed and all members lost their 200 AP team registration fee. Try again with a different cracking pattern!`;
+    }
+
+    delete heistTeams[teamName.toLowerCase()];
+    saveData();
+
+    res.json({
+      success,
+      message: heistMessage,
+      lootedAmount,
+      sharePerPerson,
+      serverVault: vaultState.balance
+    });
+  });
+
   // --- ADMIN HELPER ---
   const isRequestAdmin = (req: express.Request): boolean => {
     const discordId = req.headers['x-admin-discord-id'] || req.body?.adminDiscordId || req.query?.adminDiscordId;
@@ -3904,6 +4327,377 @@ Guidelines for your responses:
     res.json({ afkUsers });
   });
 
+  // BOT API: BANK ACTIONS (+deposit, +withdraw)
+  app.post('/api/discord-bot/bank', verifyBotSecret, (req, res) => {
+    const { discordId, username, amount, action } = req.body;
+    if (!discordId || !username || !action) {
+      return res.status(400).json({ error: 'discordId, username, and action are required.' });
+    }
+
+    const farmer = getOrCreateFarmerByDiscord(discordId, username);
+    const walletPoints = farmer.points || 0;
+    const bankBal = farmer.bankBalance || 0;
+
+    let transactionVal = 0;
+    if (action === 'deposit') {
+      if (amount === 'all') {
+        transactionVal = walletPoints;
+      } else {
+        transactionVal = parseInt(amount, 10);
+      }
+
+      if (isNaN(transactionVal) || transactionVal <= 0) {
+        return res.status(400).json({ error: 'Please enter a valid positive number or "all".' });
+      }
+      if (walletPoints < transactionVal) {
+        return res.status(400).json({ error: `Insufficient wallet balance! You only have ${walletPoints} AP.` });
+      }
+
+      farmer.points = walletPoints - transactionVal;
+      farmer.bankBalance = bankBal + transactionVal;
+      saveData();
+
+      return res.json({
+        success: true,
+        message: `🏦 Deposited **${transactionVal} AP** into your secure bank vault! Current balance: **${farmer.bankBalance} AP** (Wallet: **${farmer.points} AP**).`
+      });
+    } else if (action === 'withdraw') {
+      if (amount === 'all') {
+        transactionVal = bankBal;
+      } else {
+        transactionVal = parseInt(amount, 10);
+      }
+
+      if (isNaN(transactionVal) || transactionVal <= 0) {
+        return res.status(400).json({ error: 'Please enter a valid positive number or "all".' });
+      }
+      if (bankBal < transactionVal) {
+        return res.status(400).json({ error: `Insufficient bank balance! You only have ${bankBal} AP in your secure bank account.` });
+      }
+
+      farmer.points = walletPoints + transactionVal;
+      farmer.bankBalance = bankBal - transactionVal;
+      saveData();
+
+      return res.json({
+        success: true,
+        message: `💸 Withdrew **${transactionVal} AP** from your bank vault! Current balance: **${farmer.bankBalance} AP** (Wallet: **${farmer.points} AP**).`
+      });
+    }
+
+    res.status(400).json({ error: 'Invalid bank action. Must be "deposit" or "withdraw".' });
+  });
+
+  // BOT API: ROB ACTIONS (+rob, +steal)
+  app.post('/api/discord-bot/rob', verifyBotSecret, (req, res) => {
+    const { attackerDiscordId, attackerUsername, targetDiscordId, targetUsername } = req.body;
+    if (!attackerDiscordId || !attackerUsername || !targetDiscordId || !targetUsername) {
+      return res.status(400).json({ error: 'attackerDiscordId, attackerUsername, targetDiscordId, and targetUsername are required.' });
+    }
+
+    if (attackerDiscordId === targetDiscordId) {
+      return res.status(400).json({ error: "You cannot rob yourself!" });
+    }
+
+    const attacker = getOrCreateFarmerByDiscord(attackerDiscordId, attackerUsername);
+    const target = getOrCreateFarmerByDiscord(targetDiscordId, targetUsername);
+
+    const now = Date.now();
+    const cooldownPeriod = 30 * 60 * 1000; // 30 mins cooldown
+    const lastRob = attacker.robCooldown || 0;
+
+    if (now - lastRob < cooldownPeriod) {
+      const remainingSecs = Math.ceil((cooldownPeriod - (now - lastRob)) / 1000);
+      const remainingMins = Math.ceil(remainingSecs / 60);
+      return res.status(400).json({ error: `Your hands are still shaking! You can rob again in **${remainingMins} minutes**.` });
+    }
+
+    const targetPoints = target.points || 0;
+    if (targetPoints < 10) {
+      return res.status(400).json({ error: `**${target.name}** is too poor to be robbed (has less than 10 AP in wallet).` });
+    }
+
+    attacker.robCooldown = now;
+
+    const success = Math.random() < 0.45;
+    if (success) {
+      const pct = 0.20 + Math.random() * 0.10;
+      const stolen = Math.floor(targetPoints * pct);
+
+      target.points = targetPoints - stolen;
+      attacker.points = (attacker.points || 0) + stolen;
+      saveData();
+
+      return res.json({
+        success: true,
+        stolen,
+        message: `⚔️ **SUCCESSFUL ROBBERY!** You snuck up on **${target.name}** and stole **${stolen} AP** from their wallet! 💰\n` +
+                 `*Note: Always secure your AP in the bank!*`
+      });
+    } else {
+      const penalty = Math.min(attacker.points || 0, Math.max(50, Math.floor((attacker.points || 0) * 0.10)));
+      attacker.points = Math.max(0, (attacker.points || 0) - penalty);
+      target.points = targetPoints + penalty;
+      saveData();
+
+      return res.json({
+        success: false,
+        penalty,
+        message: `🚨 **BUSTED!** You tried to pickpocket **${target.name}** but tripped over a trash can! You dropped **${penalty} AP** which was pocketed by **${target.name}** as hush money.`
+      });
+    }
+  });
+
+  // BOT API: VAULT ADMIN ACTIONS (+vault deposit, +vault withdraw)
+  app.post('/api/discord-bot/vault', verifyBotSecret, (req, res) => {
+    const { adminDiscordId, adminUsername, amount, action } = req.body;
+    if (!adminDiscordId || !adminUsername || !action || !amount) {
+      return res.status(400).json({ error: 'Missing parameters.' });
+    }
+
+    const isAdmin = adminDiscordId === '840560998011502593' || adminUsername === 'admin';
+    if (!isAdmin) {
+      return res.status(403).json({ error: 'Only authorized server administrators can manage the vault.' });
+    }
+
+    const value = parseInt(amount, 10);
+    if (isNaN(value) || value <= 0) {
+      return res.status(400).json({ error: 'Vault transaction amount must be a positive integer.' });
+    }
+
+    if (action === 'deposit') {
+      vaultState.balance += value;
+      saveData();
+      return res.json({
+        success: true,
+        message: `🏢 **Vault Deposit:** Admin **${adminUsername}** deposited **${value} AP** into the server vault! New Vault Balance: **${vaultState.balance} AP**.`
+      });
+    } else if (action === 'withdraw') {
+      if (vaultState.balance < value) {
+        return res.status(400).json({ error: `Insufficient server vault balance! Maximum available: **${vaultState.balance} AP**.` });
+      }
+      vaultState.balance -= value;
+      saveData();
+      return res.json({
+        success: true,
+        message: `🏢 **Vault Withdrawal:** Admin **${adminUsername}** withdrew **${value} AP** from the server vault! Remaining: **${vaultState.balance} AP**.`
+      });
+    }
+
+    res.status(400).json({ error: 'Invalid action. Must be deposit or withdraw.' });
+  });
+
+  // BOT API: TEAM & HEIST ACTIONS (+team create/invite/remove/delete, +heist vault/list)
+  app.post('/api/discord-bot/heist', verifyBotSecret, (req, res) => {
+    const { discordId, username, action, params } = req.body;
+    if (!discordId || !username || !action) {
+      return res.status(400).json({ error: 'discordId, username, and action are required.' });
+    }
+
+    const now = Date.now();
+    for (const key of Object.keys(heistTeams)) {
+      if (now - heistTeams[key].createdAt > 3600000) {
+        delete heistTeams[key];
+      }
+    }
+
+    const callerName = username;
+
+    if (action === 'create') {
+      const { teamName } = params || {};
+      if (!teamName || teamName.trim().length < 3) {
+        return res.status(400).json({ error: 'Provide a valid team name (at least 3 chars).' });
+      }
+      const cleanTeam = teamName.trim();
+      if (heistTeams[cleanTeam.toLowerCase()]) {
+        return res.status(400).json({ error: `A team with name "${cleanTeam}" already exists.` });
+      }
+
+      const existing = Object.values(heistTeams).find(t => 
+        t.leader.toLowerCase() === callerName.toLowerCase() || 
+        t.members.some(m => m.toLowerCase() === callerName.toLowerCase())
+      );
+      if (existing) {
+        return res.status(400).json({ error: `You are already in an active team: **${existing.name}**.` });
+      }
+
+      heistTeams[cleanTeam.toLowerCase()] = {
+        name: cleanTeam,
+        leader: callerName,
+        members: [callerName],
+        createdAt: Date.now()
+      };
+
+      return res.json({
+        success: true,
+        message: `⚔️ Team **${cleanTeam}** created successfully! Leader: **${callerName}**.\n` +
+                 `Invite members using \`+team invite <name>\`. Heist the vault using \`+heist vault\`.`
+      });
+    }
+
+    const team = Object.values(heistTeams).find(t => 
+      t.leader.toLowerCase() === callerName.toLowerCase() || 
+      t.members.some(m => m.toLowerCase() === callerName.toLowerCase())
+    );
+
+    if (action === 'list') {
+      if (Object.keys(heistTeams).length === 0) {
+        return res.json({
+          success: true,
+          message: `🔍 **Active Heist Teams:** None. Use \`+team create <name>\` to form a crew and heist the server vault! 🏢 (Vault Balance: **${vaultState.balance} AP**)`
+        });
+      }
+      const lines = Object.values(heistTeams).map(t => {
+        const ageMins = Math.floor((Date.now() - t.createdAt) / 60000);
+        return `• **${t.name}** (Leader: ${t.leader}) - Members: ${t.members.join(', ')} [Active: ${ageMins}m / 60m]`;
+      });
+      return res.json({
+        success: true,
+        message: `🏢 **SERVER VAULT BALANCE:** **${vaultState.balance} AP**\n\n` +
+                 `🔍 **Active Heist Teams:**\n${lines.join('\n')}\n\n` +
+                 `*To start a heist, form a team and run \`+heist vault\`! It costs 200 AP per team member.*`
+      });
+    }
+
+    if (!team) {
+      return res.status(400).json({ error: 'You are not in any active heist team! Create one using `+team create <name>`.' });
+    }
+
+    if (action === 'delete') {
+      if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+        return res.status(403).json({ error: 'Only the team leader can disband this team.' });
+      }
+      delete heistTeams[team.name.toLowerCase()];
+      return res.json({
+        success: true,
+        message: `Disbanded team **${team.name}**.`
+      });
+    }
+
+    if (action === 'invite') {
+      const { targetUsername } = params || {};
+      if (!targetUsername) return res.status(400).json({ error: 'Provide a username to invite.' });
+
+      if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+        return res.status(403).json({ error: 'Only the team leader can invite members.' });
+      }
+      if (team.members.length >= 5) {
+        return res.status(400).json({ error: 'Team is full (maximum 5 members).' });
+      }
+
+      const foundTargetKey = Object.keys(farmers).find(k => k.toLowerCase() === targetUsername.trim().toLowerCase());
+      if (!foundTargetKey) {
+        return res.status(404).json({ error: `User "${targetUsername}" not found in player records.` });
+      }
+      const targetFarmer = farmers[foundTargetKey];
+
+      const targetInTeam = Object.values(heistTeams).some(t => 
+        t.leader.toLowerCase() === targetFarmer.name.toLowerCase() || 
+        t.members.some(m => m.toLowerCase() === targetFarmer.name.toLowerCase())
+      );
+      if (targetInTeam) {
+        return res.status(400).json({ error: `**${targetFarmer.name}** is already in another heist crew.` });
+      }
+
+      team.members.push(targetFarmer.name);
+      return res.json({
+        success: true,
+        message: `🎉 Successfully invited and added **${targetFarmer.name}** to crew **${team.name}**! (Crew members: ${team.members.join(', ')})`
+      });
+    }
+
+    if (action === 'remove') {
+      const { targetUsername } = params || {};
+      if (!targetUsername) return res.status(400).json({ error: 'Provide a member to remove.' });
+
+      if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+        return res.status(403).json({ error: 'Only the team leader can remove members.' });
+      }
+
+      if (targetUsername.toLowerCase() === team.leader.toLowerCase()) {
+        return res.status(400).json({ error: 'You cannot remove yourself. Use `+team delete` to disband.' });
+      }
+
+      const originalLen = team.members.length;
+      team.members = team.members.filter(m => m.toLowerCase() !== targetUsername.trim().toLowerCase());
+
+      if (team.members.length === originalLen) {
+        return res.status(404).json({ error: `Member "${targetUsername}" not found in team crew.` });
+      }
+
+      return res.json({
+        success: true,
+        message: `Removed **${targetUsername}** from crew. Members left: ${team.members.join(', ')}.`
+      });
+    }
+
+    if (action === 'start') {
+      if (team.leader.toLowerCase() !== callerName.toLowerCase()) {
+        return res.status(403).json({ error: 'Only the team leader can initiate the vault heist!' });
+      }
+
+      const heistCost = 200;
+      const brokeMembers: string[] = [];
+      team.members.forEach(m => {
+        const f = Object.values(farmers).find(f => f.name.toLowerCase() === m.toLowerCase());
+        if (!f || f.points < heistCost) {
+          brokeMembers.push(m);
+        }
+      });
+
+      if (brokeMembers.length > 0) {
+        return res.status(400).json({ error: `The heist cannot proceed! These crew members do not have ${heistCost} AP in their wallets: **${brokeMembers.join(', ')}**.` });
+      }
+
+      team.members.forEach(m => {
+        const f = Object.values(farmers).find(f => f.name.toLowerCase() === m.toLowerCase());
+        if (f) {
+          f.points -= heistCost;
+        }
+      });
+
+      const success = Math.random() < 0.60;
+      let lootedAmount = 0;
+      let sharePerPerson = 0;
+      let outcomeMessage = '';
+
+      if (success) {
+        const factor = 0.15 + Math.random() * 0.10;
+        lootedAmount = Math.floor(vaultState.balance * factor);
+        if (lootedAmount > vaultState.balance) lootedAmount = vaultState.balance;
+
+        vaultState.balance -= lootedAmount;
+        sharePerPerson = Math.floor(lootedAmount / team.members.length);
+
+        team.members.forEach(m => {
+          const f = Object.values(farmers).find(f => f.name.toLowerCase() === m.toLowerCase());
+          if (f) {
+            f.points = (f.points || 0) + sharePerPerson;
+          }
+        });
+
+        outcomeMessage = `🎯 **HEIST SUCCESSFUL!** 🎭\n` +
+                         `Your crew **${team.name}** successfully cracked the Server Vault safe combination and ran off with **${lootedAmount} AP**!\n` +
+                         `Split: **${sharePerPerson} AP** has been added to each crew member's wallet! 🎉\n` +
+                         `Members: ${team.members.join(', ')}`;
+      } else {
+        outcomeMessage = `🚨 **HEIST FAILED!** 🚔\n` +
+                         `A laser tripwire was activated in **${team.name}**'s attempt! The alarm triggered, and you barely escaped with your lives!\n` +
+                         `Registration fee of **200 AP per person** is lost. Better luck next time.`;
+      }
+
+      delete heistTeams[team.name.toLowerCase()];
+      saveData();
+
+      return res.json({
+        success,
+        message: outcomeMessage
+      });
+    }
+
+    res.status(400).json({ error: 'Invalid action.' });
+  });
+
   // DIRECT DISCORD INTERACTIONS WEBHOOK ENDPOINT
   app.post('/api/discord/interactions', (req: any, res) => {
     const signature = req.headers['x-signature-ed25519'] as string;
@@ -4487,6 +5281,173 @@ Guidelines for your responses:
       userVouchers: (spinUser && farmers[spinUser]) ? (farmers[spinUser].spinVouchers || 0) : 0,
       spinsToday,
       voucherUsed
+    });
+  });
+
+  // ==========================================
+  // DAILY SPIN THE WHEEL GAME ENDPOINTS
+  // ==========================================
+  const dailySpinSegments = [
+    { label: '10 AP', value: 10, type: 'ap', color: '#10b981', weight: 24 },
+    { label: '50 AP', value: 50, type: 'ap', color: '#3b82f6', weight: 18 },
+    { label: '75 AP', value: 75, type: 'ap', color: '#8b5cf6', weight: 15 },
+    { label: '100 AP', value: 100, type: 'ap', color: '#ec4899', weight: 12 },
+    { label: '250 AP', value: 250, type: 'ap', color: '#06b6d4', weight: 8 },
+    { label: '500 AP', value: 500, type: 'ap', color: '#f59e0b', weight: 3 }, // low chances than other
+    { label: 'No Reward', value: 0, type: 'none', color: '#4b5563', weight: 20 },
+    { label: 'Spin Again (+1 Spin)', value: 1, type: 'spin', color: '#14b8a6', weight: 12 },
+    { label: '+3 Spin', value: 3, type: 'spin', color: '#f43f5e', weight: 2 }, // low chances
+    { label: '+1000 AP', value: 1000, type: 'ap', color: '#eab308', weight: 1 } // Low Chances
+  ];
+
+  // GET daily spin state
+  app.get('/api/games/daily-spin/state', (req, res) => {
+    const username = req.query.username as string || '';
+    if (!username || !farmers[username]) {
+      return res.json({
+        isLoggedIn: false,
+        points: 0,
+        spinVouchers: 0,
+        extraSpins: 0,
+        spinsToday: 0,
+        dailyLimit: 1,
+        canSpin: false,
+        segments: dailySpinSegments
+      });
+    }
+
+    const farmer = farmers[username];
+    const todayStr = new Date().toISOString().split('T')[0];
+    const spinsToday = (dailyUserSpins[username] && dailyUserSpins[username][todayStr]) || 0;
+    const dailyLimit = 1;
+    const extraSpins = farmer.extraSpins || 0;
+
+    res.json({
+      isLoggedIn: true,
+      points: farmer.points || 0,
+      spinVouchers: farmer.spinVouchers || 0,
+      extraSpins,
+      spinsToday,
+      dailyLimit,
+      canSpin: spinsToday < dailyLimit || extraSpins > 0,
+      segments: dailySpinSegments
+    });
+  });
+
+  // POST redeem voucher for daily spin
+  app.post('/api/games/daily-spin/redeem-voucher', (req, res) => {
+    const { username } = req.body;
+    let amount = parseInt(req.body.amount, 10);
+    if (isNaN(amount) || amount <= 0) amount = 1;
+
+    if (!username || !farmers[username]) {
+      return res.status(400).json({ error: 'Please log in first to redeem spin vouchers.' });
+    }
+
+    const farmer = farmers[username];
+    const currentVouchers = farmer.spinVouchers || 0;
+
+    if (currentVouchers < amount) {
+      return res.status(400).json({
+        error: `Insufficient spin vouchers. You have ${currentVouchers}, but tried to redeem ${amount}.`
+      });
+    }
+
+    farmer.spinVouchers = currentVouchers - amount;
+    farmer.extraSpins = (farmer.extraSpins || 0) + amount;
+    farmer.lastActive = Date.now();
+    saveData();
+
+    res.json({
+      success: true,
+      message: `Successfully redeemed ${amount} voucher(s) for +${amount} spin(s)! 🎰`,
+      points: farmer.points,
+      spinVouchers: farmer.spinVouchers,
+      extraSpins: farmer.extraSpins
+    });
+  });
+
+  // POST trigger daily spin
+  app.post('/api/games/daily-spin/trigger', (req, res) => {
+    const { username } = req.body;
+    if (!username || !farmers[username]) {
+      return res.status(400).json({ error: 'Please log in first to spin the wheel.' });
+    }
+
+    const farmer = farmers[username];
+    const todayStr = new Date().toISOString().split('T')[0];
+    if (!dailyUserSpins[username]) dailyUserSpins[username] = {};
+    let spinsToday = dailyUserSpins[username][todayStr] || 0;
+    const dailyLimit = 1;
+    let extraSpins = farmer.extraSpins || 0;
+
+    let useExtraSpin = false;
+
+    if (spinsToday >= dailyLimit) {
+      if (extraSpins > 0) {
+        useExtraSpin = true;
+      } else {
+        return res.status(400).json({
+          error: 'You have used your free daily spin! Redeem a spin voucher for +1 spin to spin again.'
+        });
+      }
+    }
+
+    // Weighted selection of segment
+    const totalWeight = dailySpinSegments.reduce((sum, s) => sum + s.weight, 0);
+    let randomVal = Math.floor(Math.random() * totalWeight);
+    let segmentIndex = 0;
+    
+    for (let i = 0; i < dailySpinSegments.length; i++) {
+      randomVal -= dailySpinSegments[i].weight;
+      if (randomVal < 0) {
+        segmentIndex = i;
+        break;
+      }
+    }
+
+    const segment = dailySpinSegments[segmentIndex];
+
+    // Apply spin usage
+    if (useExtraSpin) {
+      farmer.extraSpins = extraSpins - 1;
+    } else {
+      spinsToday += 1;
+      dailyUserSpins[username][todayStr] = spinsToday;
+    }
+
+    // Apply reward
+    let feedbackMessage = '';
+    if (segment.type === 'ap') {
+      farmer.points = (farmer.points || 0) + segment.value;
+      feedbackMessage = `🎉 Gained +${segment.value.toLocaleString()} AP!`;
+    } else if (segment.type === 'spin') {
+      farmer.extraSpins = (farmer.extraSpins || 0) + segment.value;
+      feedbackMessage = `🎰 Spin Again! Gained +${segment.value} Extra Spin(s)!`;
+    } else {
+      feedbackMessage = 'No reward this time! Better luck on your next spin! 🍀';
+    }
+
+    farmer.lastActive = Date.now();
+    saveData();
+
+    // Log activity
+    logActivity(
+      '🎰 Daily Spin Play',
+      `**${username}** spun the Daily Lucky Wheel and won **${segment.label}**!\n` +
+      `👛 New Balance: **${farmer.points.toLocaleString()} AP** | 🎰 Extra Spins: **${farmer.extraSpins || 0}**`,
+      3447003
+    );
+
+    res.json({
+      success: true,
+      segmentIndex,
+      segment,
+      points: farmer.points,
+      spinVouchers: farmer.spinVouchers || 0,
+      extraSpins: farmer.extraSpins || 0,
+      spinsToday,
+      feedbackMessage
     });
   });
 

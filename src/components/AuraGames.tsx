@@ -5,6 +5,7 @@ import { Tooltip } from './Tooltip';
 import SlidePuzzle from './SlidePuzzle';
 import HigherLower from './HigherLower';
 import RockPaperScissors from './RockPaperScissors';
+import AuraBankHeist from './AuraBankHeist';
 
 interface GameLog {
   id: string;
@@ -25,6 +26,8 @@ interface AuraGamesProps {
   onOpenAuthModal: () => void;
   points?: number;
   setPoints?: React.Dispatch<React.SetStateAction<number>>;
+  bankBalance?: number;
+  setBankBalance?: React.Dispatch<React.SetStateAction<number>>;
   showNotice?: (msg: string, type: 'success' | 'error' | 'info') => void;
   isAdmin?: boolean;
   userDiscordId?: string;
@@ -36,6 +39,8 @@ export default function AuraGames({
   onOpenAuthModal,
   points = 0,
   setPoints,
+  bankBalance = 0,
+  setBankBalance,
   showNotice,
   isAdmin = false,
   userDiscordId = ''
@@ -60,7 +65,7 @@ export default function AuraGames({
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'higherlower' | 'rps' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'higherlower' | 'rps' | 'bank' | 'spin' | null>(null);
 
   // Rules visibility states
   const [showMathRules, setShowMathRules] = useState<boolean>(false);
@@ -108,6 +113,138 @@ export default function AuraGames({
   const [kotdPlayers, setKotdPlayers] = useState<any[]>([]);
   const [kotdLogs, setKotdLogs] = useState<GameLog[]>([]);
   const [kotdRound, setKotdRound] = useState<number>(1);
+
+  // --- DAILY LUCKY SPIN GAME STATE ---
+  const [dailySpinState, setDailySpinState] = useState<{
+    points: number;
+    spinVouchers: number;
+    extraSpins: number;
+    spinsToday: number;
+    dailyLimit: number;
+    canSpin: boolean;
+    segments: any[];
+  } | null>(null);
+  const [isSpinning, setIsSpinning] = useState<boolean>(false);
+  const [spinRotation, setSpinRotation] = useState<number>(0);
+  const [spinResult, setSpinResult] = useState<any | null>(null);
+  const [isRedeemingVoucher, setIsRedeemingVoucher] = useState<boolean>(false);
+  const [redeemVoucherAmount, setRedeemVoucherAmount] = useState<string>('1');
+
+  const fetchDailySpinState = async () => {
+    try {
+      const res = await fetch(`/api/games/daily-spin/state?username=${encodeURIComponent(playerName)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDailySpinState(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch daily spin state:', err);
+    }
+  };
+
+  const segments = dailySpinState?.segments || [
+    { label: '10 AP', value: 10, type: 'ap', color: '#10b981', weight: 24 },
+    { label: '50 AP', value: 50, type: 'ap', color: '#3b82f6', weight: 18 },
+    { label: '75 AP', value: 75, type: 'ap', color: '#8b5cf6', weight: 15 },
+    { label: '100 AP', value: 100, type: 'ap', color: '#ec4899', weight: 12 },
+    { label: '250 AP', value: 250, type: 'ap', color: '#06b6d4', weight: 8 },
+    { label: '500 AP', value: 500, type: 'ap', color: '#f59e0b', weight: 3 }, // low chances than other
+    { label: 'No Reward', value: 0, type: 'none', color: '#4b5563', weight: 20 },
+    { label: 'Spin Again (+1 Spin)', value: 1, type: 'spin', color: '#14b8a6', weight: 12 },
+    { label: '+3 Spin', value: 3, type: 'spin', color: '#f43f5e', weight: 2 }, // low chances
+    { label: '+1000 AP', value: 1000, type: 'ap', color: '#eab308', weight: 1 } // Low Chances
+  ];
+
+  const triggerDailySpin = async () => {
+    if (isSpinning) return;
+    setIsSpinning(true);
+    setSpinResult(null);
+
+    try {
+      const res = await fetch('/api/games/daily-spin/trigger', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: playerName })
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || 'Failed to spin the wheel.');
+      }
+
+      const data = await res.json();
+      const winningIndex = data.segmentIndex;
+
+      // Calculate new spin rotation:
+      // We do a full 6 rotations (2160 deg) plus the alignment to the top (which is - winningIndex * 36)
+      const sliceSize = 360 / segments.length;
+      const targetRotation = spinRotation + 2160 - (spinRotation % 360) + (360 - (winningIndex * sliceSize) - (sliceSize / 2));
+      setSpinRotation(targetRotation);
+
+      setTimeout(() => {
+        setIsSpinning(false);
+        setSpinResult(data.segment);
+        // Update user stats
+        if (setPoints) setPoints(data.points);
+        if (dailySpinState) {
+          setDailySpinState(prev => prev ? {
+            ...prev,
+            points: data.points,
+            spinVouchers: data.spinVouchers,
+            extraSpins: data.extraSpins,
+            spinsToday: data.spinsToday,
+            canSpin: data.spinsToday < prev.dailyLimit || data.extraSpins > 0
+          } : null);
+        }
+        showNotice?.(data.feedbackMessage || `You won ${data.segment.label}!`, 'success');
+      }, 4000);
+
+    } catch (err: any) {
+      setIsSpinning(false);
+      showNotice?.(err.message || 'Error spinning the wheel.', 'error');
+    }
+  };
+
+  const handleRedeemVouchersInUI = async () => {
+    const amount = parseInt(redeemVoucherAmount, 10);
+    if (isNaN(amount) || amount <= 0) {
+      showNotice?.('Please enter a valid positive voucher amount.', 'error');
+      return;
+    }
+    setIsRedeemingVoucher(true);
+    try {
+      const res = await fetch('/api/games/daily-spin/redeem-voucher', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: playerName, amount })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotice?.(data.message, 'success');
+        if (dailySpinState) {
+          setDailySpinState(prev => prev ? {
+            ...prev,
+            spinVouchers: data.spinVouchers,
+            extraSpins: data.extraSpins,
+            canSpin: prev.spinsToday < prev.dailyLimit || data.extraSpins > 0
+          } : null);
+        }
+        setRedeemVoucherAmount('1');
+      } else {
+        showNotice?.(data.error || 'Failed to redeem vouchers.', 'error');
+      }
+    } catch (err: any) {
+      showNotice?.(err.message || 'Error redeeming vouchers.', 'error');
+    } finally {
+      setIsRedeemingVoucher(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeGame === 'spin' && isLoggedIn) {
+      fetchDailySpinState();
+    }
+  }, [activeGame, playerName, isLoggedIn]);
 
   // Synchronize playerName with localStorage changes
   useEffect(() => {
@@ -789,7 +926,38 @@ export default function AuraGames({
                 <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🪙 High-Stakes Betting Games</h3>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                {/* Daily Lucky Spin Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-pink-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3 text-left">
+                    <span className="text-xs font-mono font-bold text-pink-400 uppercase tracking-widest bg-pink-500/10 border border-pink-500/20 px-3 py-1 rounded-full inline-block animate-pulse">
+                      Daily Fortune
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Daily Lucky Spin</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Spin the wheel once a day for free! Redeem your Spin Vouchers to get extra spins and win massive jackpots of up to 1,000 AP!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Spin the wheel once a day for amazing prizes" position="top">
+                        <button
+                          onClick={() => {
+                            if (!isLoggedIn) {
+                              onOpenAuthModal();
+                              return;
+                            }
+                            setActiveGame('spin');
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-pink-950/25"
+                        >
+                          <RotateCw className="w-4 h-4" /> Spin Now
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Betting Casino Selector */}
                 <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-amber-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
                   <div className="space-y-3">
@@ -883,6 +1051,46 @@ export default function AuraGames({
                         </button>
                       </Tooltip>
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Category 3: Financial Systems & Vault Heists */}
+            <div className="space-y-5">
+              <div className="flex items-center gap-2.5 border-b border-zinc-800 pb-2">
+                <span className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400">
+                  <Landmark className="w-4.5 h-4.5" />
+                </span>
+                <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🏦 Aura Banking & Vault Heists</h3>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
+                <div className="p-8 rounded-3xl bg-gradient-to-br from-zinc-900 via-zinc-950 to-emerald-950/20 border border-zinc-800/80 hover:border-emerald-500/30 transition-all flex flex-col md:flex-row md:items-center md:justify-between gap-6 shadow-2xl relative overflow-hidden group">
+                  <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl group-hover:bg-emerald-500/8 transition-all duration-700 pointer-events-none" />
+                  <div className="space-y-4 max-w-2xl text-left">
+                    <span className="text-xs font-mono font-black text-emerald-400 uppercase tracking-widest bg-emerald-500/10 border border-emerald-500/20 px-4 py-1.5 rounded-full inline-block">
+                      Secure Vault & High-Stakes Co-op
+                    </span>
+                    <h3 className="text-2xl md:text-3xl font-black text-white tracking-tight">Aura Bank & Server Vault Heist</h3>
+                    <p className="text-sm text-zinc-400 leading-relaxed">
+                      Secure your hard-earned Aura Points in the secure Bank account (immune to robberies!). Form a heist crew with up to 5 members, register for a high-stakes safe-cracking run (costs 200 AP per player), and hack the server vault for up to 25% of the massive server vault bank roll!
+                    </p>
+                  </div>
+                  <div className="shrink-0 flex flex-col sm:flex-row gap-3 md:w-80">
+                    <button
+                      onClick={() => {
+                        if (!isLoggedIn) {
+                          onOpenAuthModal();
+                          return;
+                        }
+                        setActiveGame('bank');
+                      }}
+                      className="w-full py-4 px-6 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white font-black transition-all text-base active:scale-95 flex items-center justify-center gap-2.5 shadow-xl shadow-emerald-950/40 relative overflow-hidden group/btn"
+                    >
+                      <span className="absolute inset-0 bg-white/10 opacity-0 group-hover/btn:opacity-100 transition-opacity duration-300 pointer-events-none" />
+                      <Landmark className="w-5 h-5" /> Access Bank & Vault
+                    </button>
                   </div>
                 </div>
               </div>
@@ -1278,6 +1486,356 @@ export default function AuraGames({
               setPoints={setPoints}
               showNotice={showNotice}
               onBack={() => setActiveGame(null)}
+            />
+          </motion.div>
+        ) : activeGame === 'spin' ? (
+          /* DAILY LUCKY SPIN WHEEL GAME */
+          <motion.div
+            key="daily-spin-wheel"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="space-y-6"
+          >
+            {/* Header / Back button */}
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-zinc-900/30 p-5 rounded-2xl border border-zinc-800/60 shadow-lg text-left">
+              <div className="flex flex-col md:flex-row items-start md:items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setActiveGame(null)}
+                    className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900 transition-all text-zinc-400 hover:text-white"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono font-bold text-pink-400 bg-pink-500/10 px-2 py-0.5 rounded border border-pink-500/20 animate-pulse">
+                        DAILY FORTUNE
+                      </span>
+                    </div>
+                    <h2 className="text-2xl font-black text-white mt-1">Daily Lucky Spin</h2>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="flex items-center gap-4 bg-zinc-950/80 px-4 py-2.5 rounded-xl border border-zinc-800">
+                <div className="text-right">
+                  <span className="text-[10px] font-mono font-bold text-zinc-500 block uppercase">Your Balance</span>
+                  <span className="text-sm font-black text-amber-400">{(dailySpinState?.points ?? points).toLocaleString()} AP</span>
+                </div>
+                <div className="w-px h-8 bg-zinc-800" />
+                <div className="text-right">
+                  <span className="text-[10px] font-mono font-bold text-zinc-500 block uppercase">Spin Vouchers</span>
+                  <span className="text-sm font-black text-pink-400">{dailySpinState?.spinVouchers ?? 0} Vouchers</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Main Interactive Grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 text-left">
+              {/* Left Column: Spin Wheel Stage (7 cols on desktop) */}
+              <div className="lg:col-span-7 flex flex-col items-center justify-center bg-zinc-900/25 border border-zinc-800/60 rounded-3xl p-8 relative overflow-hidden min-h-[500px]">
+                {/* Background decorative grids */}
+                <div className="absolute inset-0 bg-radial-at-t from-pink-500/5 via-transparent to-transparent pointer-events-none" />
+                
+                {/* Wheel Container */}
+                <div className="relative flex flex-col items-center">
+                  
+                  {/* Top Pointer Indicator */}
+                  <div className="absolute -top-3 z-30 filter drop-shadow-[0_4px_6px_rgba(0,0,0,0.6)] animate-bounce">
+                    <svg className="w-8 h-8 text-pink-500 fill-pink-500" viewBox="0 0 24 24">
+                      <path d="M12 21l-8-12h16z" />
+                    </svg>
+                  </div>
+
+                  {/* Outer ring with decorative glowing LEDs */}
+                  <div className="relative p-3 bg-gradient-to-b from-zinc-800 to-zinc-950 rounded-full border border-zinc-700 shadow-[0_25px_60px_-15px_rgba(0,0,0,0.9)]">
+                    {/* The Wheel itself */}
+                    <div 
+                      className="w-72 h-72 md:w-80 md:h-80 rounded-full overflow-hidden relative border-4 border-zinc-950 transition-transform duration-1000"
+                      style={{
+                        transform: `rotate(${spinRotation}deg)`,
+                        transition: isSpinning ? 'transform 4000ms cubic-bezier(0.15, 0.85, 0.15, 1)' : 'transform 500ms ease-out'
+                      }}
+                    >
+                      <svg viewBox="0 0 100 100" className="w-full h-full select-none">
+                        {segments.map((seg, i) => {
+                          const sliceAngle = 360 / segments.length;
+                          const startAngle = i * sliceAngle - 90;
+                          const endAngle = (i + 1) * sliceAngle - 90;
+                          const startRad = (startAngle * Math.PI) / 180;
+                          const endRad = (endAngle * Math.PI) / 180;
+                          
+                          const x1 = 50 + 50 * Math.cos(startRad);
+                          const y1 = 50 + 50 * Math.sin(startRad);
+                          const x2 = 50 + 50 * Math.cos(endRad);
+                          const y2 = 50 + 50 * Math.sin(endRad);
+                          
+                          const midAngle = startAngle + sliceAngle / 2;
+                          const midRad = (midAngle * Math.PI) / 180;
+                          const tx = 50 + 34 * Math.cos(midRad);
+                          const ty = 50 + 34 * Math.sin(midRad);
+                          
+                          return (
+                            <g key={i}>
+                              <path
+                                d={`M 50 50 L ${x1} ${y1} A 50 50 0 0 1 ${x2} ${y2} Z`}
+                                fill={seg.color}
+                                stroke="#18181b"
+                                strokeWidth="0.8"
+                              />
+                              <text
+                                x={tx}
+                                y={ty}
+                                fill="#ffffff"
+                                fontSize="2.8"
+                                fontWeight="bold"
+                                textAnchor="middle"
+                                alignmentBaseline="middle"
+                                transform={`rotate(${midAngle + 90}, ${tx}, ${ty})`}
+                                className="font-sans filter drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]"
+                              >
+                                {seg.label.replace(' AP', '')}
+                              </text>
+                            </g>
+                          );
+                        })}
+                      </svg>
+                    </div>
+
+                    {/* Central Glowing Hub with Spin Button */}
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          triggerDailySpin();
+                        }}
+                        disabled={isSpinning || !(dailySpinState?.canSpin)}
+                        className={`pointer-events-auto w-16 h-16 md:w-20 md:h-20 rounded-full bg-zinc-950 border-4 border-zinc-800 flex flex-col items-center justify-center transition-all duration-300 shadow-[0_0_20px_rgba(236,72,153,0.3)] hover:border-pink-500 hover:shadow-[0_0_30px_rgba(236,72,153,0.6)] select-none cursor-pointer ${
+                          isSpinning ? 'opacity-90 scale-95' : 'active:scale-95'
+                        }`}
+                      >
+                        <span className="text-[10px] font-black text-zinc-400 tracking-wider uppercase font-mono">
+                          {isSpinning ? 'SPINNING' : 'SPIN'}
+                        </span>
+                        <RotateCw className={`w-4 h-4 text-pink-400 mt-1 ${isSpinning ? 'animate-spin' : ''}`} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Spin Feedback Message */}
+                <div className="mt-8 text-center max-w-md min-h-[44px]">
+                  {spinResult ? (
+                    <motion.div
+                      initial={{ scale: 0.8, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      className="p-3 bg-pink-500/10 border border-pink-500/20 rounded-xl"
+                    >
+                      <span className="text-sm font-semibold text-pink-300">
+                        🎉 Winning Segment: <strong className="text-white text-base font-black uppercase tracking-wider">{spinResult.label}</strong>
+                      </span>
+                    </motion.div>
+                  ) : (
+                    <p className="text-xs text-zinc-500">
+                      {isSpinning ? 'May the fortune be with you... 🍀' : 'Click the central SPIN button or any of the controls below to try your luck!'}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Information & Voucher Redemption (5 cols on desktop) */}
+              <div className="lg:col-span-5 space-y-6">
+                
+                {/* Spin Controls & Status Panel */}
+                <div className="bg-zinc-900/30 border border-zinc-800/60 p-6 rounded-3xl space-y-4">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-pink-400" /> Spin Dashboard
+                  </h3>
+                  
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800/60 text-left">
+                      <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase block">Daily Spins Used</span>
+                      <span className="text-lg font-black text-white">{dailySpinState?.spinsToday ?? 0} / {dailySpinState?.dailyLimit ?? 1}</span>
+                      <span className="text-[9px] text-zinc-400 mt-1 block">Resets daily at UTC midnight.</span>
+                    </div>
+
+                    <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-800/60 text-left">
+                      <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase block">Available Extra Spins</span>
+                      <span className="text-lg font-black text-pink-400">{dailySpinState?.extraSpins ?? 0} Spins</span>
+                      <span className="text-[9px] text-zinc-400 mt-1 block">Earned via redeeming vouchers.</span>
+                    </div>
+                  </div>
+
+                  {/* Main Trigger Buttons */}
+                  <div className="space-y-3 pt-2">
+                    <button
+                      onClick={triggerDailySpin}
+                      disabled={isSpinning || !(dailySpinState?.canSpin)}
+                      className={`w-full py-4 rounded-xl font-extrabold transition-all text-sm flex items-center justify-center gap-2.5 shadow-lg border ${
+                        dailySpinState?.canSpin && !isSpinning
+                          ? 'bg-gradient-to-r from-pink-600 to-rose-600 hover:from-pink-500 hover:to-rose-500 text-white border-pink-500/20 hover:shadow-pink-500/10 active:scale-[0.98]'
+                          : 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                      }`}
+                    >
+                      <RotateCw className={`w-4 h-4 ${isSpinning ? 'animate-spin' : ''}`} />
+                      {isSpinning ? 'Spinning Wheel...' : (dailySpinState?.spinsToday ?? 0) < (dailySpinState?.dailyLimit ?? 1) ? 'Spin Daily Wheel (FREE)' : 'Spin Using Extra Spin'}
+                    </button>
+                    
+                    {!(dailySpinState?.canSpin) && !isSpinning && (
+                      <p className="text-[11px] text-center text-rose-400 font-medium">
+                        ⚠️ You have used your free daily spin! Redeem a spin voucher below or use `+redeemvoucher` to spin again.
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Voucher Redemption Panel */}
+                <div className="bg-zinc-900/30 border border-zinc-800/60 p-6 rounded-3xl space-y-4">
+                  <div className="flex justify-between items-center">
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      🎟️ Redeem Spin Vouchers
+                    </h3>
+                    <span className="text-xs font-mono font-bold text-pink-400 bg-pink-500/10 border border-pink-500/20 px-2 py-0.5 rounded">
+                      {dailySpinState?.spinVouchers ?? 0} Vouchers
+                    </span>
+                  </div>
+                  
+                  <p className="text-xs text-zinc-400 leading-relaxed">
+                    Convert your existing Spin Vouchers into usable Extra Spins. Each Spin Voucher yields exactly **+1 Spin** on the wheel!
+                  </p>
+
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        min="1"
+                        max={dailySpinState?.spinVouchers ?? 1}
+                        value={redeemVoucherAmount}
+                        onChange={(e) => setRedeemVoucherAmount(e.target.value)}
+                        placeholder="Voucher amount..."
+                        className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-pink-500 focus:ring-1 focus:ring-pink-500 rounded-xl px-4 py-3 text-sm text-white font-mono placeholder-zinc-600 outline-none transition-all"
+                      />
+                    </div>
+                    
+                    <button
+                      onClick={handleRedeemVouchersInUI}
+                      disabled={isRedeemingVoucher || (dailySpinState?.spinVouchers ?? 0) <= 0}
+                      className={`px-5 py-3 rounded-xl font-bold transition-all text-sm shrink-0 active:scale-95 ${
+                        (dailySpinState?.spinVouchers ?? 0) > 0
+                          ? 'bg-zinc-100 hover:bg-white text-zinc-950'
+                          : 'bg-zinc-800 text-zinc-500 cursor-not-allowed border border-zinc-700/60'
+                      }`}
+                    >
+                      {isRedeemingVoucher ? 'Redeeming...' : 'Redeem'}
+                    </button>
+                  </div>
+                  
+                  <div className="flex gap-2 justify-start">
+                    <button
+                      type="button"
+                      onClick={() => setRedeemVoucherAmount('1')}
+                      className="text-[10px] font-mono font-bold text-zinc-500 hover:text-white bg-zinc-950 border border-zinc-800 hover:border-zinc-700 px-2.5 py-1 rounded transition-all"
+                    >
+                      Redeem 1
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRedeemVoucherAmount(String(dailySpinState?.spinVouchers ?? 1))}
+                      className="text-[10px] font-mono font-bold text-zinc-500 hover:text-white bg-zinc-950 border border-zinc-800 hover:border-zinc-700 px-2.5 py-1 rounded transition-all"
+                    >
+                      Redeem All
+                    </button>
+                  </div>
+                  
+                  <span className="text-[10px] text-zinc-500 block italic">
+                    💡 Tip: You can also use the Discord bot command `+redeemvoucher &lt;amount&gt;` (or `+rv &lt;amount&gt;`) anytime!
+                  </span>
+                </div>
+
+                {/* Prizes Breakdown Table */}
+                <div className="bg-zinc-900/30 border border-zinc-800/60 p-6 rounded-3xl space-y-3">
+                  <h3 className="text-base font-bold text-white flex items-center gap-2">
+                    🏆 Wheel Prizes & Probability Odds
+                  </h3>
+                  
+                  <div className="divide-y divide-zinc-800/40 text-xs">
+                    <div className="flex justify-between py-2 text-zinc-400 font-mono text-[10px] uppercase font-bold">
+                      <span>Prize Reward</span>
+                      <span>Chances Level</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">10 AP</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">Very High (20.8%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">No Reward</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">High (17.3%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">50 AP</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">High (15.6%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">75 AP</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">Medium (13.0%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">100 AP</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">Medium (10.4%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">Spin Again (+1 Spin)</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">Medium (10.4%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">250 AP</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-zinc-800/60 text-pink-400">Uncommon (6.9%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">500 AP</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-amber-950/40 text-amber-400">Low (2.6%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">+3 Spin Jackpot</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-rose-950/40 text-rose-400">Very Low (1.7%)</span>
+                    </div>
+
+                    <div className="flex justify-between py-2.5 items-center">
+                      <span className="font-semibold text-zinc-300">+1000 AP Mega Jackpot</span>
+                      <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-yellow-950/40 text-yellow-400 font-extrabold animate-pulse">Ultra Low (0.8%)</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+          </motion.div>
+        ) : activeGame === 'bank' ? (
+          /* AURA BANK & VAULT HEIST DISPLAY */
+          <motion.div
+            key="bank-heist"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+          >
+            <AuraBankHeist
+              playerName={propPlayerName}
+              isLoggedIn={isLoggedIn}
+              points={points}
+              setPoints={setPoints}
+              showNotice={showNotice}
+              onBack={() => setActiveGame(null)}
+              isAdmin={isAdmin}
             />
           </motion.div>
         ) : (

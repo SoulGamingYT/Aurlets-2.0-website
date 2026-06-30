@@ -13,6 +13,7 @@ import {
 } from 'discord.js';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ANNOUNCEMENTS } from './src/data.js';
 
 const BOT_CONFIG_PATH = path.join(process.cwd(), 'bot-config.json');
 
@@ -65,6 +66,7 @@ interface Farmer {
   bankBalance?: number;
   robCooldown?: number;
   dailyLastHeist?: number;
+  extraSpins?: number;
 }
 
 interface Giveaway {
@@ -975,7 +977,9 @@ export function startDiscordBot(
       'buy', 'purchase',
       'customrole', 'cr', 'custom',
       'redeem',
+      'redeemvoucher', 'rv',
       'website', 'web', 'site',
+      'announcement', 'announcements', 'updates', 'news',
       'channel',
       'add',
       'remove',
@@ -1143,7 +1147,9 @@ export function startDiscordBot(
             `• \`+shop\` - View roles and items available in the Reward Shop.\n` +
             `• \`+buy <number/name>\` - Buy a server role from the Shop (e.g. \`+buy 1\`)\n` +
             `• \`+redeem <code>\` - Redeem a promo/rewards code for Aura Points or Vouchers (e.g. \`+redeem AURLETS100\`)\n` +
+            `• \`+redeemvoucher <amount>\` (or \`+rv\`) - Redeem Spin Vouchers for Wheel spins (e.g. \`+rv 3\`)\n` +
             `• \`+customrole\` (or \`+cr\`) - Get the direct link to configure/buy your premium Custom Discord Role!\n` +
+            `• \`+announcement\` (or \`+updates\`, \`+news\`) - Send the latest server update and announcement!\n` +
             `• \`+website\` (or \`+web\`, \`+site\`) - Get the official link to the Aurlets web dashboard!`;
         } else if (interaction.customId === 'help_user') {
           categoryTitle = '📊 User Profiles & Transfers';
@@ -2394,6 +2400,40 @@ export function startDiscordBot(
     }
 
     // ==========================================
+    // 14.2 REDEEM VOUCHER FOR SPIN COMMAND
+    // ==========================================
+    if (commandName === 'redeemvoucher' || commandName === 'rv') {
+      const amountArg = args[0];
+      let amount = 1;
+      if (amountArg) {
+        amount = parseInt(amountArg, 10);
+        if (isNaN(amount) || amount <= 0) {
+          return sendError('Usage: `+redeemvoucher <number>` (e.g. `+redeemvoucher 3` to redeem 3 vouchers for 3 spins).');
+        }
+      }
+
+      const currentVouchers = farmer.spinVouchers || 0;
+      if (currentVouchers < amount) {
+        return sendError(`❌ You do not have enough Spin Vouchers to redeem! You only have **${currentVouchers}** voucher(s). Earn more via Giveaways, Daily Chests, or Shop purchases.`);
+      }
+
+      // Deduct vouchers and add extra spins
+      farmer.spinVouchers = currentVouchers - amount;
+      farmer.extraSpins = (farmer.extraSpins || 0) + amount;
+      farmer.lastActive = Date.now();
+
+      saveData();
+
+      return sendEmbed(
+        '🎟️ Spin Vouchers Redeemed!',
+        `Successfully redeemed **${amount} Spin Voucher(s)** for **+${amount} Spin(s)**! 🎰\n\n` +
+        `🎰 **Available Extra Spins:** **${farmer.extraSpins}**\n` +
+        `🎟️ **Remaining Spin Vouchers:** **${farmer.spinVouchers}**`,
+        10181046 // Purple
+      );
+    }
+
+    // ==========================================
     // 14.5 WEBSITE COMMAND
     // ==========================================
     if (commandName === 'website' || commandName === 'web' || commandName === 'site') {
@@ -2409,6 +2449,25 @@ export function startDiscordBot(
         `*(Be sure to log in with your Discord account to instantly link your progress and points!)*`;
 
       return sendEmbed('🌐 Aurlets Official Website', desc, 3447003); // Cyan
+    }
+
+    // ==========================================
+    // 14.6 ANNOUNCEMENT / UPDATES / NEWS COMMAND
+    // ==========================================
+    if (commandName === 'announcement' || commandName === 'announcements' || commandName === 'updates' || commandName === 'news') {
+      if (!ANNOUNCEMENTS || ANNOUNCEMENTS.length === 0) {
+        return sendError('❌ No announcements have been published yet!');
+      }
+
+      const latest = ANNOUNCEMENTS[0];
+      const webLink = process.env.APP_URL || 'http://localhost:3000';
+      const desc = `📢 **${latest.title}**\n\n` +
+        `📅 **Date:** ${latest.date}\n` +
+        `🏷️ **Category:** \`${latest.tag || 'Server Update'}\`\n\n` +
+        `${latest.description}\n\n` +
+        `🔗 **Read More:** [View full Announcement Board on Website](${webLink}/announcements)`;
+
+      return sendEmbed('📢 Latest Server Update & News', desc, 10181046); // Purple
     }
 
     // ==========================================

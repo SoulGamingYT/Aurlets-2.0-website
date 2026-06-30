@@ -17,7 +17,9 @@ import {
   Upload, 
   Image, 
   X,
-  Wrench
+  Wrench,
+  Calendar,
+  Coins
 } from 'lucide-react';
 
 interface AdminPanelProps {
@@ -59,7 +61,14 @@ export default function AdminPanel({
   discordConfigured,
   onPointsUpdated
 }: AdminPanelProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles' | 'maintenance'>('users');
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles' | 'maintenance' | 'shop' | 'heist'>('users');
+  
+  // States for Shop Config
+  const [customRolePrice, setCustomRolePrice] = useState<number>(49999);
+  const [presetRoles, setPresetRoles] = useState<Array<{ id: string; name: string; emoji: string; price: number }>>([]);
+  const [dailyLimit, setDailyLimit] = useState<number>(1);
+  const [isSavingShopConfig, setIsSavingShopConfig] = useState<boolean>(false);
+  const [isLoadingShopConfig, setIsLoadingShopConfig] = useState<boolean>(false);
   
   // States for Puzzle Images approval
   const [pendingPuzzles, setPendingPuzzles] = useState<Array<{ id: string; url: string; uploadedBy: string; approved: boolean; createdAt: number }>>([]);
@@ -112,6 +121,17 @@ export default function AdminPanel({
   const [maintenanceCategories, setMaintenanceCategories] = useState<string[]>([]);
   const [isSavingMaintenance, setIsSavingMaintenance] = useState<boolean>(false);
 
+  // Heist/Vault Admin States
+  const [adminVaultBalance, setAdminVaultBalance] = useState<number>(0);
+  const [vaultTxAmount, setVaultTxAmount] = useState<string>('');
+  const [vaultTxAction, setVaultTxAction] = useState<'deposit' | 'withdraw'>('deposit');
+  const [scheduleVaultName, setScheduleVaultName] = useState<string>('');
+  const [scheduleTargetAmount, setScheduleTargetAmount] = useState<string>('');
+  const [scheduleTime, setScheduleTime] = useState<string>('');
+  const [adminUpcomingHeists, setAdminUpcomingHeists] = useState<any[]>([]);
+  const [isSubmittingVaultTx, setIsSubmittingVaultTx] = useState<boolean>(false);
+  const [isSchedulingHeist, setIsSchedulingHeist] = useState<boolean>(false);
+
   // General feedback notice
   const [notice, setNotice] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -123,6 +143,116 @@ export default function AdminPanel({
   };
 
   // --- FETCHING FUNCTIONS ---
+  const fetchVaultAndHeists = async () => {
+    try {
+      const res = await fetch(`/api/team/info?name=${encodeURIComponent(adminUsername)}`);
+      if (res.ok) {
+        const data = await res.json();
+        setAdminVaultBalance(data.serverVault || 0);
+        setAdminUpcomingHeists(data.upcomingHeists || []);
+      }
+    } catch (err) {
+      console.error('Failed to load admin vault details:', err);
+    }
+  };
+
+  const handleVaultTransaction = async () => {
+    const value = parseInt(vaultTxAmount, 10);
+    if (isNaN(value) || value <= 0) {
+      showNotice('Please enter a valid positive transaction amount.', 'error');
+      return;
+    }
+    setIsSubmittingVaultTx(true);
+    try {
+      const res = await fetch('/api/admin/vault/transaction', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ amount: value, action: vaultTxAction })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotice(data.message, 'success');
+        setVaultTxAmount('');
+        fetchVaultAndHeists();
+      } else {
+        showNotice(data.error || 'Failed to process vault transaction.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    } finally {
+      setIsSubmittingVaultTx(false);
+    }
+  };
+
+  const handleScheduleHeist = async () => {
+    if (!scheduleVaultName.trim() || !scheduleTargetAmount || !scheduleTime) {
+      showNotice('Please fill in all heist scheduling fields.', 'error');
+      return;
+    }
+    const target = parseInt(scheduleTargetAmount, 10);
+    if (isNaN(target) || target <= 0) {
+      showNotice('Please enter a valid target amount.', 'error');
+      return;
+    }
+    setIsSchedulingHeist(true);
+    try {
+      const res = await fetch('/api/admin/heist/schedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({
+          vaultName: scheduleVaultName.trim(),
+          targetAmount: target,
+          scheduledAt: scheduleTime
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotice(data.message, 'success');
+        setScheduleVaultName('');
+        setScheduleTargetAmount('');
+        setScheduleTime('');
+        fetchVaultAndHeists();
+      } else {
+        showNotice(data.error || 'Failed to schedule heist.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    } finally {
+      setIsSchedulingHeist(false);
+    }
+  };
+
+  const handleUnscheduleHeist = async (id: string) => {
+    if (!window.confirm('Are you sure you want to cancel and unschedule this heist?')) return;
+    try {
+      const res = await fetch('/api/admin/heist/unschedule', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ id })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showNotice(data.message, 'success');
+        fetchVaultAndHeists();
+      } else {
+        showNotice(data.error || 'Failed to cancel heist.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    }
+  };
   const fetchUsers = async () => {
     setIsLoadingUsers(true);
     try {
@@ -454,17 +584,67 @@ export default function AdminPanel({
     }
   };
 
+  const fetchShopConfig = async () => {
+    setIsLoadingShopConfig(true);
+    try {
+      const res = await fetch('/api/shop/config');
+      if (res.ok) {
+        const data = await res.json();
+        setCustomRolePrice(data.customRolePrice);
+        setPresetRoles(data.presetRoles || []);
+        setDailyLimit(data.dailyLimit || 1);
+      }
+    } catch (err) {
+      console.error('Failed to fetch shop config:', err);
+    } finally {
+      setIsLoadingShopConfig(false);
+    }
+  };
+
+  const handleSaveShopConfig = async () => {
+    setIsSavingShopConfig(true);
+    try {
+      const res = await fetch('/api/admin/shop/config', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({
+          customRolePrice,
+          presetRoles,
+          dailyLimit
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice('Shop configurations updated successfully!', 'success');
+      } else {
+        showNotice(data.error || 'Failed to update shop configuration.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message || 'Error updating shop configuration.', 'error');
+    } finally {
+      setIsSavingShopConfig(false);
+    }
+  };
+
   useEffect(() => {
     fetchUsers();
     fetchCodes();
     fetchAuditReports();
     fetchBackupsHistory();
     fetchMaintenanceSettings();
+    fetchShopConfig();
+    fetchVaultAndHeists();
   }, [adminDiscordId, adminUsername]);
 
   useEffect(() => {
     if (activeSubTab === 'backup') {
       fetchBackupsHistory();
+    } else if (activeSubTab === 'heist') {
+      fetchVaultAndHeists();
     }
   }, [activeSubTab]);
 
@@ -869,6 +1049,32 @@ export default function AdminPanel({
             }`}
           >
             <Wrench className="w-4 h-4 text-amber-500" /> Maintenance Mode 🛠️
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('shop');
+              fetchShopConfig();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'shop'
+                ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <Award className="w-4 h-4 text-pink-400" /> Reward Shop Config 🛒
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('heist');
+              fetchVaultAndHeists();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'heist'
+                ? 'bg-pink-600 text-white shadow shadow-pink-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <Calendar className="w-4 h-4 text-pink-400 animate-pulse" /> Vault Heist Console 💎
           </button>
         </div>
 
@@ -1961,6 +2167,283 @@ export default function AdminPanel({
               >
                 {isSavingMaintenance ? 'Saving Changes...' : 'Save & Deploy Settings'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'shop' && (
+        <div className="space-y-6 text-left animate-fade-in">
+          <div className="border-b border-zinc-900 pb-3">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Award className="w-5 h-5 text-pink-500" /> Reward Shop Config 🛒
+            </h3>
+            <p className="text-zinc-400 text-xs font-medium">
+              Update Custom Role prices and individual Preset Role prices in real-time. Changes apply instantly to all users.
+            </p>
+          </div>
+
+          <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Custom Role Price */}
+              <div className="p-4 rounded-xl bg-zinc-900/20 border border-zinc-850/60 space-y-3">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 font-bold block">Custom Discord Role Price (AP)</span>
+                <p className="text-[10px] text-zinc-400">Price for users to create a server-wide custom styled Discord role.</p>
+                <input
+                  type="number"
+                  value={customRolePrice}
+                  onChange={(e) => setCustomRolePrice(Math.max(0, parseInt(e.target.value) || 0))}
+                  className="w-full px-4 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-white font-mono text-sm focus:outline-none focus:border-pink-500"
+                />
+              </div>
+
+              {/* Daily Limit */}
+              <div className="p-4 rounded-xl bg-zinc-900/20 border border-zinc-850/60 space-y-3">
+                <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 font-bold block">Daily Spin Game Limit</span>
+                <p className="text-[10px] text-zinc-400">Max limit of Spin Games per user daily.</p>
+                <input
+                  type="number"
+                  value={dailyLimit}
+                  onChange={(e) => setDailyLimit(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full px-4 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-white font-mono text-sm focus:outline-none focus:border-pink-500"
+                />
+              </div>
+            </div>
+
+            {/* Preset Roles Price Configuration */}
+            <div className="space-y-4">
+              <span className="text-[10px] font-mono uppercase tracking-widest text-zinc-500 font-bold block">Preset Roles Prices</span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {presetRoles.map((role, idx) => (
+                  <div key={role.id} className="p-4 rounded-xl bg-zinc-900/20 border border-zinc-850/60 flex flex-col justify-between space-y-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">{role.emoji}</span>
+                      <div>
+                        <div className="text-xs font-bold text-white">{role.name}</div>
+                        <div className="text-[10px] text-zinc-500 font-mono">ID: {role.id}</div>
+                      </div>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[9px] font-mono text-zinc-500 font-bold block">Price (AP):</label>
+                      <input
+                        type="number"
+                        value={role.price}
+                        onChange={(e) => {
+                          const updated = [...presetRoles];
+                          updated[idx] = { ...role, price: Math.max(0, parseInt(e.target.value) || 0) };
+                          setPresetRoles(updated);
+                        }}
+                        className="w-full px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-white font-mono text-xs focus:outline-none focus:border-pink-500"
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Save Shop Action */}
+            <div className="flex justify-end pt-3">
+              <button
+                onClick={handleSaveShopConfig}
+                disabled={isSavingShopConfig}
+                className="px-6 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-indigo-600 hover:from-pink-500 hover:to-indigo-500 text-white text-xs font-black uppercase tracking-wider transition-all disabled:opacity-40 flex items-center gap-2 shadow-lg active:scale-95"
+              >
+                {isSavingShopConfig ? 'Saving Prices...' : 'Save & Deploy Prices'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'heist' && (
+        <div className="space-y-6 text-left animate-fade-in">
+          <div className="border-b border-zinc-900 pb-3">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-pink-500" /> Vault Heist Console 💎
+            </h3>
+            <p className="text-zinc-400 text-xs font-medium">
+              Calibrate global heist vaults, inject central reserve AP jackpots, or schedule/cancel upcoming server-wide coop heist raids.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* LEFT COLUMN: VAULT BANKROLL MANAGEMENT */}
+            <div className="lg:col-span-5 space-y-6">
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-6">
+                <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                  <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400 flex items-center gap-2">
+                    🛡️ Central Vault Balance
+                  </h4>
+                  <span className="text-[10px] bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full font-bold">
+                    Active Reservoir
+                  </span>
+                </div>
+
+                <div className="bg-zinc-900/40 p-5 rounded-2xl border border-zinc-850 flex items-center justify-between">
+                  <div className="space-y-1">
+                    <div className="text-[10px] font-mono font-bold text-zinc-500 uppercase">Current Vault Bankroll</div>
+                    <div className="text-2xl font-black font-mono text-amber-300">
+                      {adminVaultBalance.toLocaleString()} <span className="text-xs text-amber-400">AP</span>
+                    </div>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                    <Coins className="w-6 h-6" />
+                  </div>
+                </div>
+
+                {/* Vault Transaction (Deposit/Withdraw) */}
+                <div className="space-y-4">
+                  <div className="text-xs font-mono font-bold text-zinc-400">Perform Vault Treasury Adjustments</div>
+                  
+                  <div className="flex gap-2 p-1 bg-zinc-900/60 rounded-xl border border-zinc-850">
+                    <button
+                      onClick={() => setVaultTxAction('deposit')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                        vaultTxAction === 'deposit' 
+                          ? 'bg-emerald-600 text-white shadow' 
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      Deposit Fund
+                    </button>
+                    <button
+                      onClick={() => setVaultTxAction('withdraw')}
+                      className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                        vaultTxAction === 'withdraw' 
+                          ? 'bg-rose-600 text-white shadow' 
+                          : 'text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      Withdraw Fund
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-mono text-zinc-500 font-bold uppercase block">Adjustment Amount (AP)</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={vaultTxAmount}
+                        onChange={(e) => setVaultTxAmount(e.target.value)}
+                        placeholder="e.g. 50000"
+                        className="flex-1 px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono text-xs focus:outline-none focus:border-pink-500"
+                      />
+                      <button
+                        onClick={handleVaultTransaction}
+                        disabled={isSubmittingVaultTx || !vaultTxAmount}
+                        className={`px-5 py-2.5 rounded-xl text-white font-black text-xs uppercase tracking-wider transition-all disabled:opacity-40 flex items-center gap-2 ${
+                          vaultTxAction === 'deposit' ? 'bg-emerald-600 hover:bg-emerald-500' : 'bg-rose-600 hover:bg-rose-500'
+                        }`}
+                      >
+                        {isSubmittingVaultTx ? 'Syncing...' : 'Submit'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* RIGHT COLUMN: HEIST SCHEDULER & UPCOMING HEISTS */}
+            <div className="lg:col-span-7 space-y-6">
+              {/* HEIST RAIDS SCHEDULER FORM */}
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-5">
+                <div className="border-b border-zinc-900 pb-3">
+                  <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400">
+                    🎯 Schedule Server Vault Heist Raid
+                  </h4>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div className="space-y-1.5 text-left">
+                    <label className="text-[10px] font-mono text-zinc-500 font-bold uppercase block">Heist Vault Name</label>
+                    <input
+                      type="text"
+                      value={scheduleVaultName}
+                      onChange={(e) => setScheduleVaultName(e.target.value)}
+                      placeholder="e.g. Cyber Security Safehouse"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono text-xs focus:outline-none focus:border-pink-500"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 text-left">
+                    <label className="text-[10px] font-mono text-zinc-500 font-bold uppercase block">Target Jackpot Pool (AP)</label>
+                    <input
+                      type="number"
+                      value={scheduleTargetAmount}
+                      onChange={(e) => setScheduleTargetAmount(e.target.value)}
+                      placeholder="e.g. 250000"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono text-xs focus:outline-none focus:border-pink-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 text-left">
+                  <label className="text-[10px] font-mono text-zinc-500 font-bold uppercase block">Scheduled Date & Time (Local / UTC)</label>
+                  <input
+                    type="datetime-local"
+                    value={scheduleTime}
+                    onChange={(e) => setScheduleTime(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white font-mono text-xs focus:outline-none focus:border-pink-500"
+                  />
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    onClick={handleScheduleHeist}
+                    disabled={isSchedulingHeist || !scheduleVaultName.trim() || !scheduleTargetAmount || !scheduleTime}
+                    className="px-6 py-2.5 rounded-xl bg-pink-600 hover:bg-pink-500 disabled:opacity-40 text-white text-xs font-black uppercase tracking-wider transition-all flex items-center gap-1.5 active:scale-95"
+                  >
+                    <Plus className="w-4 h-4" /> Schedule Upcoming Heist
+                  </button>
+                </div>
+              </div>
+
+              {/* LIST OF UPCOMING SCHEDULER HEISTS */}
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-4">
+                <div className="border-b border-zinc-900 pb-2">
+                  <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400">
+                    🗓️ Scheduled Upcoming Raids ({adminUpcomingHeists.length})
+                  </h4>
+                </div>
+
+                {adminUpcomingHeists.length === 0 ? (
+                  <div className="text-xs text-zinc-500 font-mono text-center py-6">
+                    No upcoming vault heists scheduled. Use the form above to post one!
+                  </div>
+                ) : (
+                  <div className="space-y-2.5 max-h-60 overflow-y-auto">
+                    {adminUpcomingHeists.map((h, index) => {
+                      const formattedDate = new Date(h.scheduledAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        timeZoneName: 'short'
+                      });
+                      return (
+                        <div 
+                          key={h.id || index}
+                          className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-850 flex items-center justify-between gap-4 font-mono text-xs text-left"
+                        >
+                          <div className="space-y-1">
+                            <div className="font-bold text-white text-sm">{h.vaultName}</div>
+                            <div className="text-[10px] text-zinc-400">
+                              Target Jackpot: <span className="text-amber-400 font-bold">{h.targetAmount.toLocaleString()} AP</span> | Schedule: <span className="text-pink-400">{formattedDate}</span>
+                            </div>
+                          </div>
+                          <button
+                            onClick={() => handleUnscheduleHeist(h.id)}
+                            className="p-2 rounded-lg bg-zinc-950 hover:bg-red-950/40 border border-zinc-850 hover:border-red-900 text-zinc-500 hover:text-red-400 transition-all"
+                            title="Unschedule & Cancel Heist"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>

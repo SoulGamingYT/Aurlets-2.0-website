@@ -51,6 +51,20 @@ export const STAFF_MEMBERS: StaffMember[] = [
 
 export const ANNOUNCEMENTS: Announcement[] = [
   {
+    id: 'ann-system-upgrade',
+    title: '🏦 Secure Banking, Robberies & Server Vault Heists are LIVE!',
+    description: 'Protect your hard-earned AP with the new Secure Bank Account. Join a heist syndicate, solve the dial lock puzzle, and crack the server bankroll. Use Discord commands +deposit, +withdraw, +rob, and +team to join the action!',
+    date: 'Jun 30, 2026',
+    tag: 'System Update'
+  },
+  {
+    id: 'ann-navigation-upgrade',
+    title: '🔗 Direct Link SPA Routing Activated',
+    description: 'You can now share and load direct paths to website sections! Share /staff, /giveaway, /auragames, or /shop to take users straight to that category instantly.',
+    date: 'Jun 30, 2026',
+    tag: 'Web Update'
+  },
+  {
     id: 'ann-1',
     title: 'Aurlets Vs Pookiestan PFP Battle',
     description: 'Nitro - Bundles and Decos Rewards -> Join Discord For More Details..',

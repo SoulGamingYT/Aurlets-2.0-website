@@ -71,6 +71,10 @@ export default function App() {
     const p = localStorage.getItem('aurlets_points');
     return p ? parseInt(p) : 0;
   });
+  const [bankBalance, setBankBalance] = useState<number>(() => {
+    const b = localStorage.getItem('aurlets_bank_balance');
+    return b ? parseInt(b) : 0;
+  });
   const [discordUser, setDiscordUser] = useState<any>(() => {
     const u = localStorage.getItem('aurlets_discord_user');
     return u ? JSON.parse(u) : null;
@@ -151,12 +155,13 @@ export default function App() {
     localStorage.setItem('aurlets_name', nickname);
     localStorage.setItem('aurlets_avatar', avatarUrl);
     localStorage.setItem('aurlets_points', points.toString());
+    localStorage.setItem('aurlets_bank_balance', bankBalance.toString());
     if (discordUser) {
       localStorage.setItem('aurlets_discord_user', JSON.stringify(discordUser));
     } else {
       localStorage.removeItem('aurlets_discord_user');
     }
-  }, [isLoggedIn, nickname, avatarUrl, points, discordUser]);
+  }, [isLoggedIn, nickname, avatarUrl, points, bankBalance, discordUser]);
 
   // Sync cosmetic states with localStorage changes across tabs/windows
   const [userColor, setUserColor] = useState<string | null>(null);
@@ -226,6 +231,9 @@ export default function App() {
         .then(data => {
           if (typeof data.points === 'number') {
             setPoints(data.points);
+            if (data.farmer && typeof data.farmer.bankBalance === 'number') {
+              setBankBalance(data.farmer.bankBalance);
+            }
             if (invitedByVal) {
               localStorage.removeItem('aurlets_invited_by');
               showGlobalNotice(`Successfully applied referral from ${invitedByVal}! You both earned bonus AP! 🎉`, 'success');
@@ -252,6 +260,47 @@ export default function App() {
       return () => clearInterval(interval);
     }
   }, [isLoggedIn, nickname]);
+
+  // --- CUSTOM ROUTING SYSTEM FOR PATH COHERENCY ---
+  // Sync URL pathname with activeTab state
+  useEffect(() => {
+    let targetPath = `/${activeTab}`;
+    if (activeTab === 'games') targetPath = '/auragames';
+    else if (activeTab === 'giveaways') targetPath = '/giveaway';
+    
+    if (window.location.pathname.toLowerCase() !== targetPath) {
+      window.history.pushState({}, '', targetPath);
+    }
+  }, [activeTab]);
+
+  // Sync activeTab state with URL pathname on load and popstate
+  useEffect(() => {
+    const handleLocationChange = () => {
+      const path = window.location.pathname.replace(/^\//, '').toLowerCase();
+      let tabId = 'home';
+      if (path === 'home') tabId = 'home';
+      else if (path === 'info') tabId = 'info';
+      else if (path === 'announcements') tabId = 'announcements';
+      else if (path === 'highlights') tabId = 'highlights';
+      else if (path === 'staff') tabId = 'staff';
+      else if (path === 'games' || path === 'auragames') tabId = 'games';
+      else if (path === 'afk' || path === 'afkfarming') tabId = 'afk';
+      else if (path === 'leaderboard' || path === 'leaderboards') tabId = 'leaderboards';
+      else if (path === 'giveaway' || path === 'giveaways') tabId = 'giveaways';
+      else if (path === 'minecraft' || path === 'auracraft') tabId = 'minecraft';
+      else if (path === 'shop' || path === 'rewardshop') tabId = 'shop';
+      else if (path === 'admin') tabId = 'admin';
+      
+      setActiveTab(tabId);
+    };
+
+    window.addEventListener('popstate', handleLocationChange);
+    handleLocationChange(); // Run once initially on mount
+
+    return () => {
+      window.removeEventListener('popstate', handleLocationChange);
+    };
+  }, []);
 
   // Listen for successful Discord Auth postMessage from the popup callback
   useEffect(() => {
@@ -457,6 +506,8 @@ export default function App() {
             onOpenAuthModal={() => setShowAuthModal(true)} 
             points={points}
             setPoints={setPoints}
+            bankBalance={bankBalance}
+            setBankBalance={setBankBalance}
             showNotice={(msg, type) => showGlobalNotice(msg, type)}
             isAdmin={isAdmin}
             userDiscordId={discordUser?.id || ''}
