@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { startDiscordBot } from './discord-bot.js';
+import { PermissionFlagsBits } from 'discord.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -658,6 +659,54 @@ async function startServer() {
       discordStats,
       systemAdmins
     );
+
+    // Initial member count sync after 30 seconds (once bot is logged in)
+    setTimeout(() => {
+      if (botInstance) {
+        try {
+          const liveCount = botInstance.guilds.cache.reduce((acc, g) => acc + g.memberCount, 0);
+          if (liveCount > 0) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const existingEntry = discordStats.memberCountHistory.find(entry => entry.date === todayStr);
+            if (existingEntry) {
+              existingEntry.count = liveCount;
+            } else {
+              discordStats.memberCountHistory.push({ date: todayStr, count: liveCount });
+              if (discordStats.memberCountHistory.length > 30) {
+                discordStats.memberCountHistory.shift();
+              }
+            }
+            saveData();
+          }
+        } catch (e) {
+          console.error('[SYSTEM] Error in initial memberCountHistory sync:', e);
+        }
+      }
+    }, 30000);
+
+    // Regular interval to update member count history
+    setInterval(() => {
+      if (botInstance) {
+        try {
+          const liveCount = botInstance.guilds.cache.reduce((acc, g) => acc + g.memberCount, 0);
+          if (liveCount > 0) {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const existingEntry = discordStats.memberCountHistory.find(entry => entry.date === todayStr);
+            if (existingEntry) {
+              existingEntry.count = liveCount;
+            } else {
+              discordStats.memberCountHistory.push({ date: todayStr, count: liveCount });
+              if (discordStats.memberCountHistory.length > 30) {
+                discordStats.memberCountHistory.shift();
+              }
+            }
+            saveData();
+          }
+        } catch (e) {
+          console.error('[SYSTEM] Error in periodic memberCountHistory sync:', e);
+        }
+      }
+    }, 1000 * 60 * 60); // hourly check
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
@@ -5316,28 +5365,65 @@ Guidelines for your responses:
   // DISCORD STATS & MESSAGING ENDPOINTS
   // ==========================================
   // GET list of text channels for web messaging
-  app.get('/api/discord/channels', (req, res) => {
+  app.get('/api/discord/channels', async (req, res) => {
     if (!botInstance) {
-      // Fallback channels if bot offline
-      return res.json({
-        channels: [
-          { id: '1392526036520009782', name: 'general' },
-          { id: '1392526036520009783', name: 'bot-commands' },
-          { id: '1392526036520009784', name: 'aura-games' }
-        ]
-      });
+      return res.json({ channels: [] });
     }
     try {
       const channels: Array<{ id: string; name: string }> = [];
-      botInstance.guilds.cache.forEach(guild => {
-        guild.channels.cache.forEach(channel => {
-          if (channel.isTextBased()) {
-            channels.push({ id: channel.id, name: channel.name });
+      const discordId = req.query.discordId as string | undefined;
+
+      if (!discordId) {
+        return res.json({ channels: [] });
+      }
+
+      for (const [guildId, guild] of botInstance.guilds.cache) {
+        let member = guild.members.cache.get(discordId);
+        if (!member) {
+          try {
+            member = await guild.members.fetch(discordId);
+          } catch (err) {
+            // Member not found in this guild
           }
-        });
-      });
+        }
+
+        for (const [channelId, channel] of guild.channels.cache) {
+          if (channel.isTextBased()) {
+            let hasAccess = true;
+
+            // Bot's own permissions check
+            const me = guild.members.me;
+            if (me) {
+              const botPermissions = channel.permissionsFor(me);
+              if (!botPermissions || !botPermissions.has(PermissionFlagsBits.ViewChannel) || !botPermissions.has(PermissionFlagsBits.SendMessages)) {
+                hasAccess = false;
+              }
+            } else {
+              hasAccess = false;
+            }
+
+            // User's permissions check
+            if (hasAccess) {
+              if (member) {
+                const userPermissions = channel.permissionsFor(member);
+                if (!userPermissions || !userPermissions.has(PermissionFlagsBits.ViewChannel) || !userPermissions.has(PermissionFlagsBits.SendMessages)) {
+                  hasAccess = false;
+                }
+              } else {
+                hasAccess = false;
+              }
+            }
+
+            if (hasAccess) {
+              channels.push({ id: channel.id, name: channel.name });
+            }
+          }
+        }
+      }
+
       res.json({ channels });
     } catch (err) {
+      console.error('[API] Error listing text channels:', err);
       res.status(500).json({ error: 'Failed to retrieve channels' });
     }
   });

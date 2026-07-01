@@ -658,6 +658,7 @@ export default function App() {
           <DiscordStats
             isLoggedIn={isLoggedIn}
             nickname={nickname}
+            discordUser={discordUser}
             onOpenAuthModal={() => setShowAuthModal(true)}
             showNotice={(msg, type) => showGlobalNotice(msg, type)}
           />

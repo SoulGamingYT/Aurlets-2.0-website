@@ -21,6 +21,7 @@ import { Tooltip } from './Tooltip';
 interface DiscordStatsProps {
   isLoggedIn: boolean;
   nickname: string;
+  discordUser: any;
   onOpenAuthModal: () => void;
   showNotice: (msg: string, type: 'success' | 'error' | 'info') => void;
 }
@@ -38,6 +39,7 @@ interface MemberHistoryItem {
 export default function DiscordStats({
   isLoggedIn,
   nickname,
+  discordUser,
   onOpenAuthModal,
   showNotice
 }: DiscordStatsProps) {
@@ -66,7 +68,8 @@ export default function DiscordStats({
         setStats(statsData);
       }
 
-      const channelsRes = await fetch('/api/discord/channels');
+      const discordIdParam = discordUser?.id ? `?discordId=${encodeURIComponent(discordUser.id)}` : '';
+      const channelsRes = await fetch(`/api/discord/channels${discordIdParam}`);
       const channelsContentType = channelsRes.headers.get('content-type');
       if (channelsRes.ok && channelsContentType && channelsContentType.includes('application/json')) {
         const channelsData = await channelsRes.json();
@@ -87,7 +90,7 @@ export default function DiscordStats({
     fetchStatsAndChannels();
     const interval = setInterval(fetchStatsAndChannels, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [discordUser?.id]);
 
   // Cooldown timer effect
   useEffect(() => {
@@ -148,28 +151,22 @@ export default function DiscordStats({
     }
   };
 
-  // Helper to generate mock history if server records are fresh
+  // Map real server member count history records to correct timestamps
   const getProcessedHistory = (): MemberHistoryItem[] => {
-    const rawHistory: MemberHistoryItem[] = stats?.discordStats?.memberCountHistory || [];
+    const rawHistory: any[] = stats?.discordStats?.memberCountHistory || [];
     
-    // Generate a rich mock dataset if history is empty
-    if (rawHistory.length === 0) {
-      const mockPoints: MemberHistoryItem[] = [];
-      const now = Date.now();
-      const baseMembers = stats?.liveMemberCount || 150;
-      
-      for (let i = 10; i >= 0; i--) {
-        const timeOffset = i * 24 * 60 * 60 * 1000; // days ago
-        const count = Math.round(baseMembers - i * 5 + Math.sin(i) * 3);
-        mockPoints.push({
-          timestamp: now - timeOffset,
-          count: count > 0 ? count : 10
-        });
+    return rawHistory.map(item => {
+      let ts = 0;
+      if (item.timestamp) {
+        ts = item.timestamp;
+      } else if (item.date) {
+        ts = new Date(item.date).getTime();
       }
-      return mockPoints;
-    }
-
-    return rawHistory;
+      return {
+        timestamp: ts,
+        count: item.count
+      };
+    });
   };
 
   const getFilteredHistory = () => {
@@ -294,7 +291,7 @@ export default function DiscordStats({
                   <div className="space-y-1">
                     <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-zinc-500 block">Live Guild Members</span>
                     <div className="text-2xl font-black font-mono text-white flex items-center gap-2">
-                      {(stats?.liveMemberCount || 150).toLocaleString()}
+                      {(stats?.liveMemberCount ?? 0).toLocaleString()}
                       <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 inline-block animate-pulse" title="Gateway Active" />
                     </div>
                   </div>
@@ -321,7 +318,7 @@ export default function DiscordStats({
                   <div className="space-y-1">
                     <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-zinc-500 block">Most Active Channel</span>
                     <div className="text-base font-black font-mono text-white truncate max-w-[160px]">
-                      #{stats?.mostActiveChannel || 'general'}
+                      {stats?.mostActiveChannel ? `#${stats.mostActiveChannel}` : 'N/A'}
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
@@ -334,7 +331,7 @@ export default function DiscordStats({
                   <div className="space-y-1">
                     <span className="text-[10px] font-mono uppercase tracking-wider font-bold text-zinc-500 block">Hottest Voice Channel</span>
                     <div className="text-base font-black font-mono text-white truncate max-w-[160px]">
-                      🔊 {stats?.mostActiveVC || 'Aura Lounge'}
+                      {stats?.mostActiveVC ? `🔊 ${stats.mostActiveVC}` : 'N/A'}
                     </div>
                   </div>
                   <div className="p-3 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
