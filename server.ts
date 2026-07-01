@@ -319,9 +319,12 @@ async function startServer() {
         upcomingHeists,
         bannedUsers,
         discordStats,
-        systemAdmins
+        systemAdmins,
+        heistTeams
       };
-      fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+      const tempFile = DATA_FILE + '.tmp';
+      fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), 'utf-8');
+      fs.renameSync(tempFile, DATA_FILE);
     } catch (err) {
       console.error('Error saving to persistent storage:', err);
     }
@@ -382,6 +385,7 @@ async function startServer() {
         if (parsed.lastAuditTimestamp) lastAuditTimestamp = parsed.lastAuditTimestamp;
         if (parsed.bannedUsers) bannedUsers = parsed.bannedUsers;
         if (parsed.discordStats) discordStats = parsed.discordStats;
+        if (parsed.heistTeams) heistTeams = parsed.heistTeams;
         if (parsed.systemAdmins && Array.isArray(parsed.systemAdmins)) {
           systemAdmins = parsed.systemAdmins;
           if (!systemAdmins.includes('840560998011502593')) {
@@ -707,6 +711,16 @@ async function startServer() {
         }
       }
     }, 1000 * 60 * 60); // hourly check
+
+    // Periodic 60-second save & sync to prevent progress/data loss between discord bot and website
+    setInterval(() => {
+      try {
+        saveData();
+      } catch (e) {
+        console.error('[SYSTEM] Error in periodic 60s state sync:', e);
+      }
+    }, 60000);
+
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
@@ -5253,7 +5267,7 @@ Guidelines for your responses:
   });
 
   // POST ban user
-  app.post('/api/admin/ban', (req, res) => {
+  app.post('/api/admin/ban', async (req, res) => {
     if (!isRequestAdmin(req)) {
       return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
     }
@@ -5262,16 +5276,106 @@ Guidelines for your responses:
       return res.status(400).json({ error: 'Username is required to ban.' });
     }
 
-    const cleanUser = username.trim().toLowerCase();
+    const targetInput = String(username).trim();
+    const cleanTarget = targetInput.toLowerCase();
+
+    let resolvedUsername = targetInput;
+    let resolvedDiscordId = discordId ? String(discordId).trim() : undefined;
+
+    // 1. Try to find user in farmers database first
+    let foundFarmer: Farmer | null = null;
+    for (const name in farmers) {
+      const f = farmers[name];
+      if (
+        (f.discordUsername && f.discordUsername.toLowerCase() === cleanTarget) ||
+        f.name.toLowerCase() === cleanTarget ||
+        (f.discordId && f.discordId === targetInput)
+      ) {
+        foundFarmer = f;
+        break;
+      }
+    }
+
+    if (foundFarmer) {
+      resolvedUsername = foundFarmer.discordUsername || foundFarmer.name;
+      if (foundFarmer.discordId) {
+        resolvedDiscordId = foundFarmer.discordId;
+      }
+    }
+
+    // 2. Try searching via Discord bot if online
+    if (botInstance) {
+      let foundMember: any = null;
+
+      // Try searching guilds cache first
+      for (const [guildId, guild] of botInstance.guilds.cache) {
+        const member = guild.members.cache.find(m => m.user.username.toLowerCase() === cleanTarget);
+        if (member) {
+          foundMember = member;
+          break;
+        }
+      }
+
+      // If not in cache, actively fetch from Discord guilds to get the real user ID matching the username
+      if (!foundMember) {
+        for (const [guildId, guild] of botInstance.guilds.cache) {
+          try {
+            const fetchedMembers = await guild.members.fetch({ query: targetInput, limit: 5 });
+            const match = fetchedMembers.find(m => m.user.username.toLowerCase() === cleanTarget);
+            if (match) {
+              foundMember = match;
+              break;
+            }
+          } catch (fetchErr) {
+            console.error(`[API] Discord fetch failed for guild ${guildId}:`, fetchErr);
+          }
+        }
+      }
+
+      if (foundMember) {
+        resolvedUsername = foundMember.user.username;
+        resolvedDiscordId = foundMember.id;
+      }
+    }
+
+    // If still no discordId resolved but we have a numeric targetInput, that could be the discordId itself!
+    if (!resolvedDiscordId && /^\d{17,21}$/.test(targetInput)) {
+      resolvedDiscordId = targetInput;
+      // Reverse lookup username from bot for this ID if possible
+      if (botInstance) {
+        for (const [guildId, guild] of botInstance.guilds.cache) {
+          try {
+            const member = await guild.members.fetch(targetInput);
+            if (member) {
+              resolvedUsername = member.user.username;
+              break;
+            }
+          } catch (e) {}
+        }
+      }
+    }
+
+    // Ensure userID matches username provided
+    if (!resolvedDiscordId) {
+      return res.status(404).json({
+        error: `Could not resolve a Discord User ID for the username "${targetInput}". Please enter a valid, unique Discord Username (e.g. john_doe, not their display name) or manually provide the correct Target Discord ID.`
+      });
+    }
+
+    const cleanUser = resolvedUsername.toLowerCase();
     bannedUsers[cleanUser] = {
-      username: username.trim(),
-      discordId: discordId ? String(discordId).trim() : undefined,
+      username: resolvedUsername,
+      discordId: resolvedDiscordId,
       bannedAt: Date.now(),
       reason: reason || 'Violation of server rules.'
     };
     saveData();
 
-    res.json({ success: true, message: `Successfully banned ${username}.`, bannedUsers });
+    res.json({
+      success: true,
+      message: `Successfully banned ${resolvedUsername} (User ID: ${resolvedDiscordId}).`,
+      bannedUsers
+    });
   });
 
   // POST unban user
