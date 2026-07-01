@@ -1,0 +1,249 @@
+{
+  "farmers": {
+    "SoulMalik": {
+      "name": "SoulMalik",
+      "points": 181,
+      "avatarUrl": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80",
+      "lastActive": 1782896793675,
+      "discordId": "840560998011502593",
+      "discordUsername": "soul0exe",
+      "streak": 0,
+      "timeOnWebsite": 1660,
+      "invites": 0
+    }
+  },
+  "lastDailyClaims": {},
+  "customRoles": [],
+  "redeemCodes": {
+    "AURLETS100": {
+      "code": "AURLETS100",
+      "rewardAmount": 100,
+      "rewardType": "points",
+      "maxUses": 100,
+      "uses": 0,
+      "redeemedBy": [],
+      "createdAt": 1782889793707
+    }
+  },
+  "presetRolePurchases": [],
+  "dailyTransfers": {},
+  "dailyBetEarnings": {},
+  "auditReports": [
+    {
+      "timestamp": 1782889793818,
+      "totalUsers": 0,
+      "totalPoints": 0,
+      "unusuallyHighEarners": [],
+      "userPointsSnapshot": {},
+      "changes": []
+    }
+  ],
+  "lastAuditTimestamp": 1782889793818,
+  "discordBotSecret": "aurlets_bot_sec_6x58y7iq59psa85qk5g5h",
+  "puzzleImages": [],
+  "giveaways": [],
+  "kotdRewardsEnabled": true,
+  "maintenanceMode": {
+    "enabled": false,
+    "fullWebsite": false,
+    "categories": []
+  },
+  "spinGame": {
+    "visibleToPublic": false,
+    "allowedDiscordIds": [],
+    "segments": [
+      {
+        "label": "50 AP",
+        "value": 50,
+        "type": "win",
+        "color": "#10b981"
+      },
+      {
+        "label": "Lose 50",
+        "value": -50,
+        "type": "lose",
+        "color": "#ef4444"
+      },
+      {
+        "label": "100 AP",
+        "value": 100,
+        "type": "win",
+        "color": "#3b82f6"
+      },
+      {
+        "label": "Lose All",
+        "value": -99999,
+        "type": "lose",
+        "color": "#7f1d1d"
+      },
+      {
+        "label": "500 AP",
+        "value": 500,
+        "type": "win",
+        "color": "#a855f7"
+      },
+      {
+        "label": "Jackpot 1000",
+        "value": 1000,
+        "type": "win",
+        "color": "#f59e0b"
+      },
+      {
+        "label": "25 AP",
+        "value": 25,
+        "type": "win",
+        "color": "#10b981"
+      },
+      {
+        "label": "Try Again",
+        "value": 0,
+        "type": "win",
+        "color": "#6b7280"
+      }
+    ],
+    "lastSpinResult": null,
+    "dailyLimit": 1
+  },
+  "eliminationGame": {
+    "prize": "1000 AP",
+    "participants": [],
+    "remainingParticipants": [],
+    "lastEliminated": null,
+    "winner": null,
+    "isFinished": false,
+    "history": []
+  },
+  "customRolePrice": 49999,
+  "presetRolesPriceList": [
+    {
+      "id": "1417575135279452221",
+      "name": "Blossom 🌸",
+      "emoji": "🌸",
+      "price": 2500
+    },
+    {
+      "id": "1417674566515560529",
+      "name": "Overclocked ⚡",
+      "emoji": "⚡",
+      "price": 5000
+    },
+    {
+      "id": "1417679884733649007",
+      "name": "Shieldbearer 🛡️",
+      "emoji": "🛡️",
+      "price": 7500
+    },
+    {
+      "id": "1423454938784075949",
+      "name": "The Honored One",
+      "emoji": "💫",
+      "price": 10000
+    },
+    {
+      "id": "1417681913069572267",
+      "name": "Ribbon Rebel 🎀",
+      "emoji": "🎀",
+      "price": 12500
+    },
+    {
+      "id": "1417688194098659389",
+      "name": "Warrior ⚔️",
+      "emoji": "⚔️",
+      "price": 15000
+    },
+    {
+      "id": "1417689418034319394",
+      "name": "Guardian 🪽",
+      "emoji": "🪽",
+      "price": 17500
+    },
+    {
+      "id": "1420103265298813009",
+      "name": "Viber 🎧",
+      "emoji": "🎧",
+      "price": 20000
+    },
+    {
+      "id": "1420108774445682719",
+      "name": "Elite 💸",
+      "emoji": "💸",
+      "price": 22500
+    },
+    {
+      "id": "1417692877227561064",
+      "name": "Royal ⚜️",
+      "emoji": "⚜️",
+      "price": 25000
+    }
+  ],
+  "dailyUserSpins": {},
+  "serverVault": 100000,
+  "upcomingHeists": [
+    {
+      "id": "heist-1",
+      "vaultName": "Fort Knox Syndicate",
+      "targetAmount": 250000,
+      "scheduledAt": "2026-07-02T18:00:00Z"
+    },
+    {
+      "id": "heist-2",
+      "vaultName": "Aurlets Prime Vault",
+      "targetAmount": 500000,
+      "scheduledAt": "2026-07-09T20:00:00Z"
+    },
+    {
+      "id": "heist-3",
+      "vaultName": "Karachi Central Bank",
+      "targetAmount": 750000,
+      "scheduledAt": "2026-07-16T19:00:00Z"
+    }
+  ],
+  "bannedUsers": {},
+  "discordStats": {
+    "memberCountHistory": [
+      {
+        "date": "2026-06-25",
+        "count": 120
+      },
+      {
+        "date": "2026-06-26",
+        "count": 124
+      },
+      {
+        "date": "2026-06-27",
+        "count": 128
+      },
+      {
+        "date": "2026-06-28",
+        "count": 135
+      },
+      {
+        "date": "2026-06-29",
+        "count": 142
+      },
+      {
+        "date": "2026-06-30",
+        "count": 150
+      }
+    ],
+    "messageCountByChannel": {
+      "general": 1420,
+      "bot-commands": 850,
+      "announcements": 120,
+      "aura-games": 620,
+      "voice-text": 310
+    },
+    "vcJoinCountByChannel": {
+      "Aura Lounge": 85,
+      "Gaming Room 1": 62,
+      "Gaming Room 2": 28,
+      "Chill Zone": 45,
+      "Music Corner": 74
+    },
+    "liveVCs": {}
+  },
+  "systemAdmins": [
+    "840560998011502593"
+  ],
+  "heistTeams": {}
+}

@@ -109,6 +109,10 @@ export default function Shop({
   const [isPurchasingPreset, setIsPurchasingPreset] = useState<string | null>(null);
   const [deletingRoleId, setDeletingRoleId] = useState<string | null>(null);
 
+  // Dynamic Shop configurations
+  const [customRolePriceState, setCustomRolePriceState] = useState<number>(49999);
+  const [presetRolesList, setPresetRolesList] = useState<Array<{ id: string; name: string; emoji: string; price: number }>>(PRESET_ROLES);
+
   // Other cosmetic states purchased locally (for immediate client engagement)
   const [unlockedColor, setUnlockedColor] = useState<string | null>(() => localStorage.getItem('aurlets_unlocked_color'));
   const [unlockedFrame, setUnlockedFrame] = useState<boolean>(() => localStorage.getItem('aurlets_unlocked_frame') === 'true');
@@ -274,12 +278,30 @@ export default function Shop({
     }
   };
 
+  const fetchShopLiveConfig = async () => {
+    try {
+      const res = await fetch('/api/shop/config');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.customRolePrice !== undefined) {
+          setCustomRolePriceState(data.customRolePrice);
+        }
+        if (data.presetRoles && Array.isArray(data.presetRoles)) {
+          setPresetRolesList(data.presetRoles);
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching live shop configuration:', err);
+    }
+  };
+
   useEffect(() => {
     fetchPurchasedPresetRoles();
   }, [isLoggedIn, nickname]);
 
   useEffect(() => {
     fetchRoles();
+    fetchShopLiveConfig();
     const interval = setInterval(fetchRoles, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -417,7 +439,7 @@ export default function Shop({
       return;
     }
 
-    const role = PRESET_ROLES.find(r => r.id === roleId);
+    const role = presetRolesList.find(r => r.id === roleId);
     if (!role) return;
 
     if (points < role.price) {
@@ -509,7 +531,7 @@ export default function Shop({
       showNotice('Please input a role name first.', 'error');
       return;
     }
-    const cost = 49999;
+    const cost = customRolePriceState;
     if (points < cost) {
       showNotice('Insufficient points to buy a custom role.', 'error');
       return;
@@ -766,7 +788,7 @@ export default function Shop({
               </div>
               
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {PRESET_ROLES.map((role) => {
+                {presetRolesList.map((role) => {
                   const isOwned = purchasedPresetIds.includes(role.id);
                   const isPointsEnough = points >= role.price;
                   const isPending = isPurchasingPreset === role.id;
@@ -1015,7 +1037,7 @@ export default function Shop({
                 <Layers className="w-3.5 h-3.5" /> Premium Custom Role Mechanics
               </span>
               <p>
-                The premium Custom Discord Role costs <span className="text-purple-400 font-black">49999 AP</span>. Upon purchase:
+                The premium Custom Discord Role costs <span className="text-purple-400 font-black">{customRolePriceState} AP</span>. Upon purchase:
               </p>
               <ul className="list-disc list-inside space-y-1.5 pl-1.5">
                 <li>The website securely calls our connected Discord Bot.</li>
@@ -1294,13 +1316,13 @@ export default function Shop({
                         </button>
                       </Tooltip>
                     ) : (
-                      <Tooltip content="Spend 49999 AP to create a server-wide role with custom name and style" position="top">
+                      <Tooltip content={`Spend ${customRolePriceState} AP to create a server-wide role with custom name and style`} position="top">
                         <button
                           type="submit"
-                          disabled={points < 49999 || !roleName.trim() || (serverRoles.filter(r => r.creator === nickname).length >= 2)}
+                          disabled={points < customRolePriceState || !roleName.trim() || (serverRoles.filter(r => r.creator === nickname).length >= 2)}
                           className="w-full py-3 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white text-xs font-bold uppercase tracking-wider transition-all disabled:opacity-50 disabled:pointer-events-none active:scale-98 shadow-lg shadow-purple-600/10 flex items-center justify-center gap-1.5"
                         >
-                          <Coins className="w-4 h-4" /> Deduct 49999 AP &amp; Create Role
+                          <Coins className="w-4 h-4" /> Deduct {customRolePriceState} AP &amp; Create Role
                         </button>
                       </Tooltip>
                     )}
