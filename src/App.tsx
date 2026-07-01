@@ -22,7 +22,8 @@ import {
   BellOff,
   Send,
   Trophy,
-  Wrench
+  Wrench,
+  AlertTriangle
 } from 'lucide-react';
 
 // Custom sub-components
@@ -39,6 +40,7 @@ import AdminPanel from './components/AdminPanel';
 import Minecraft from './components/Minecraft';
 import Leaderboards from './components/Leaderboards';
 import Giveaways from './components/Giveaways';
+import DiscordStats from './components/DiscordStats';
 import { DiscordIcon } from './components/Icons';
 import AuthModal from './components/AuthModal';
 import { Tooltip } from './components/Tooltip';
@@ -82,6 +84,39 @@ export default function App() {
 
   const [globalNotice, setGlobalNotice] = useState<{ message: string; type: 'success' | 'error' | 'info' } | null>(null);
 
+  // Ban Restriction States
+  const [isBanned, setIsBanned] = useState<boolean>(false);
+  const [banReason, setBanReason] = useState<string>('');
+
+  // Periodically check active user ban status
+  useEffect(() => {
+    if (!nickname) {
+      setIsBanned(false);
+      return;
+    }
+    const checkBanStatus = async () => {
+      try {
+        const res = await fetch(`/api/banned/check?username=${encodeURIComponent(nickname)}&discordId=${discordUser?.id || ''}`);
+        const contentType = res.headers.get('content-type');
+        if (res.ok && contentType && contentType.includes('application/json')) {
+          const data = await res.json();
+          if (data.banned) {
+            setIsBanned(true);
+            setBanReason(data.reason || 'No reason specified by administration.');
+          } else {
+            setIsBanned(false);
+          }
+        }
+      } catch (err) {
+        // Quietly handle fetch errors during server restart
+        console.debug('Failed to sync ban status:', err);
+      }
+    };
+    checkBanStatus();
+    const interval = setInterval(checkBanStatus, 10000);
+    return () => clearInterval(interval);
+  }, [nickname, discordUser]);
+
   // Maintenance State
   const [maintenance, setMaintenance] = useState<{
     enabled: boolean;
@@ -98,12 +133,14 @@ export default function App() {
     const fetchMaintenance = async () => {
       try {
         const res = await fetch('/api/maintenance/status');
-        if (res.ok) {
+        const contentType = res.headers.get('content-type');
+        if (res.ok && contentType && contentType.includes('application/json')) {
           const data = await res.json();
           setMaintenance(data);
         }
       } catch (err) {
-        console.error('Failed to fetch maintenance status:', err);
+        // Quietly handle fetch errors during server restart
+        console.debug('Failed to fetch maintenance status:', err);
       }
     };
     fetchMaintenance();
@@ -412,11 +449,78 @@ export default function App() {
     { id: 'leaderboards', label: 'Leaderboards 🏆', icon: Trophy, tooltip: 'Check out who is dominating the rankings' },
     { id: 'giveaways', label: 'Giveaways 🎉', icon: Gift, tooltip: 'Participate in awesome community giveaways' },
     { id: 'minecraft', label: 'AuraCraft ⛏️', icon: ServerIcon, tooltip: 'Check live status of our Minecraft server' },
+    { id: 'stats', label: 'Discord Stats 📊', icon: ServerIcon, tooltip: 'Monitor live Discord members, growth history & message directly' },
     { id: 'shop', label: 'Reward Shop 🛒', icon: ShoppingBag, tooltip: 'Redeem points for Custom Discord Roles & ranks' },
     ...(isAdmin ? [{ id: 'admin', label: 'Admin Panel ⚙️', icon: UserCheck, tooltip: 'Manage user points, custom roles, and redeem codes' }] : [])
   ];
 
   const renderActiveContent = () => {
+    // Ban Takeover View
+    if (isBanned) {
+      return (
+        <div className="max-w-2xl mx-auto py-16 px-4 text-center space-y-8 animate-fade-in">
+          <div className="relative inline-flex">
+            <div className="absolute inset-0 bg-red-500/10 rounded-full blur-3xl animate-pulse" />
+            <div className="relative bg-zinc-900/50 border border-red-900/40 rounded-3xl p-6 shadow-2xl">
+              <AlertTriangle className="w-16 h-16 text-red-500 animate-pulse" />
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-red-500 font-black px-4 py-2 rounded-full bg-red-500/10 border border-red-500/20">
+              Account Restricted 🚫
+            </span>
+            <h2 className="text-3xl font-black text-white tracking-tight sm:text-4xl">
+              Access Restricted by Admin
+            </h2>
+            <div className="bg-zinc-950 border border-zinc-900 p-5 rounded-2xl max-w-md mx-auto text-left space-y-3 font-mono text-xs">
+              <div className="text-red-400 font-bold border-b border-zinc-900 pb-2">
+                REASON FOR RESTRICTION:
+              </div>
+              <p className="text-zinc-300 leading-relaxed italic">
+                "{banReason}"
+              </p>
+            </div>
+          </div>
+
+          {/* User's own statistics */}
+          <div className="max-w-md mx-auto p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl text-left space-y-4 font-mono text-xs">
+            <h3 className="text-[10px] text-zinc-500 font-black uppercase tracking-wider border-b border-zinc-900 pb-2">
+              📊 Your Personal Account Statistics
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <span className="text-[9px] text-zinc-500 font-bold block uppercase">Profile Name</span>
+                <span className="text-white font-bold text-sm truncate block">{nickname}</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[9px] text-zinc-500 font-bold block uppercase">Discord ID</span>
+                <span className="text-purple-400 font-bold text-sm truncate block">{discordUser?.id || 'N/A'}</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[9px] text-zinc-500 font-bold block uppercase">Wallet Balance</span>
+                <span className="text-amber-400 font-bold text-sm block">{points.toLocaleString()} AP</span>
+              </div>
+              <div className="space-y-1">
+                <span className="text-[9px] text-zinc-500 font-bold block uppercase">Bank Balance</span>
+                <span className="text-amber-400 font-bold text-sm block">{bankBalance.toLocaleString()} AP</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-center justify-center gap-2">
+            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-950 border border-zinc-900 text-[10px] font-mono text-zinc-500 font-bold">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+              <span>APPEAL: CONTACT GUILD ADMINISTRATORS ON DISCORD</span>
+            </div>
+            <p className="text-[10px] text-zinc-600 font-mono">
+              Website restricts banned user interactions dynamically.
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     // Maintenance Bypass for admins
     if (maintenance.enabled && !isAdmin) {
       if (maintenance.fullWebsite) {
@@ -549,6 +653,15 @@ export default function App() {
         );
       case 'minecraft':
         return <Minecraft />;
+      case 'stats':
+        return (
+          <DiscordStats
+            isLoggedIn={isLoggedIn}
+            nickname={nickname}
+            onOpenAuthModal={() => setShowAuthModal(true)}
+            showNotice={(msg, type) => showGlobalNotice(msg, type)}
+          />
+        );
       case 'shop':
         return (
           <Shop

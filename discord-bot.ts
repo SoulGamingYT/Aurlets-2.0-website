@@ -166,19 +166,30 @@ function formatTimeOnWebsite(seconds: number): string {
   return `${secs}s`;
 }
 
-function getLeaderboardEmbed(category: 'points' | 'streak' | 'web_time' | 'invites', farmersList: any[]): EmbedBuilder {
+function getLeaderboardEmbed(category: 'points' | 'streak' | 'web_time' | 'invites', farmersList: any[], walletOnly = false): EmbedBuilder {
   let title = '';
   let color = 15844367; // Gold/Yellow default
   let desc = '';
 
   if (category === 'points') {
-    title = '🏆 Global Points Leaderboard';
-    const sorted = [...farmersList].sort((a, b) => b.points - a.points).slice(0, 10);
-    desc = 'The elite of Aura Farmers rankings (Aura Points):\n\n';
-    sorted.forEach((f, idx) => {
-      const medal = idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '▪️';
-      desc += `${medal} **#${idx + 1}** \`${f.name}\` — **${(f.points || 0).toLocaleString()} AP**\n`;
-    });
+    if (walletOnly) {
+      title = '🏆 Global Wallet Points Leaderboard';
+      const sorted = [...farmersList].sort((a, b) => (b.points || 0) - (a.points || 0)).slice(0, 10);
+      desc = 'The elite of Aura Farmers rankings (Wallet-only Aura Points):\n\n';
+      sorted.forEach((f, idx) => {
+        const medal = idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '▪️';
+        desc += `${medal} **#${idx + 1}** \`${f.name}\` — **${(f.points || 0).toLocaleString()} AP**\n`;
+      });
+    } else {
+      title = '🏆 Global Total Points Leaderboard';
+      const sorted = [...farmersList].sort((a, b) => ((b.points || 0) + (b.bankBalance || 0)) - ((a.points || 0) + (a.bankBalance || 0))).slice(0, 10);
+      desc = 'The elite of Aura Farmers rankings (Total: Wallet + Bank Balance):\n\n';
+      sorted.forEach((f, idx) => {
+        const medal = idx === 0 ? '👑' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '▪️';
+        const total = (f.points || 0) + (f.bankBalance || 0);
+        desc += `${medal} **#${idx + 1}** \`${f.name}\` — **${total.toLocaleString()} AP** (Wallet: ${(f.points || 0).toLocaleString()} | Bank: ${(f.bankBalance || 0).toLocaleString()})\n`;
+      });
+    }
   } else if (category === 'streak') {
     title = '🔥 Daily Streak Leaderboard';
     color = 15105570; // Orange/Fire
@@ -258,7 +269,15 @@ export function startDiscordBot(
   }>,
   giveaways?: Giveaway[],
   vaultState?: { balance: number },
-  heistTeams?: Record<string, { name: string; leader: string; members: string[]; createdAt: number }>
+  heistTeams?: Record<string, { name: string; leader: string; members: string[]; createdAt: number }>,
+  bannedUsers?: Record<string, { username: string; discordId?: string; bannedAt: number; reason?: string }>,
+  discordStats?: {
+    memberCountHistory: Array<{ date: string; count: number }>;
+    messageCountByChannel: Record<string, number>;
+    vcJoinCountByChannel: Record<string, number>;
+    liveVCs: Record<string, string[]>;
+  },
+  systemAdmins?: string[]
 ) {
   const token = process.env.DISCORD_BOT_TOKEN;
   if (!token) {
@@ -863,9 +882,64 @@ export function startDiscordBot(
     }
   });
 
+  client.on('voiceStateUpdate', (oldState, newState) => {
+    try {
+      const member = newState.member || oldState.member;
+      if (!member || member.user.bot) return;
+
+      const username = member.user.username;
+      const oldChannelName = oldState.channel?.name;
+      const newChannelName = newState.channel?.name;
+
+      if (discordStats) {
+        if (!discordStats.liveVCs) discordStats.liveVCs = {};
+
+        // Remove user from old channel if they left
+        if (oldChannelName && discordStats.liveVCs[oldChannelName]) {
+          discordStats.liveVCs[oldChannelName] = discordStats.liveVCs[oldChannelName].filter(u => u !== username);
+          if (discordStats.liveVCs[oldChannelName].length === 0) {
+            delete discordStats.liveVCs[oldChannelName];
+          }
+        }
+
+        // Add user to new channel if they joined
+        if (newChannelName) {
+          if (!discordStats.liveVCs[newChannelName]) {
+            discordStats.liveVCs[newChannelName] = [];
+          }
+          if (!discordStats.liveVCs[newChannelName].includes(username)) {
+            discordStats.liveVCs[newChannelName].push(username);
+          }
+          // Increment join count
+          if (!discordStats.vcJoinCountByChannel) discordStats.vcJoinCountByChannel = {};
+          discordStats.vcJoinCountByChannel[newChannelName] = (discordStats.vcJoinCountByChannel[newChannelName] || 0) + 1;
+        }
+
+        saveData();
+      }
+    } catch (err) {
+      console.error('Error in voiceStateUpdate:', err);
+    }
+  });
+
   client.on('messageCreate', async (message: Message) => {
     // Ignore bots and webhooks
     if (message.author.bot) return;
+
+    // Check if user is banned
+    if (bannedUsers) {
+      const isBanned = Object.values(bannedUsers).some(
+        (b: any) => b.discordId === message.author.id || b.username.toLowerCase() === message.author.username.toLowerCase()
+      );
+      if (isBanned) return;
+    }
+
+    // Track message stats
+    if (discordStats) {
+      if (!discordStats.messageCountByChannel) discordStats.messageCountByChannel = {};
+      const chName = (message.channel as any).name || 'unknown-channel';
+      discordStats.messageCountByChannel[chName] = (discordStats.messageCountByChannel[chName] || 0) + 1;
+    }
 
     // 1. Auto-clear AFK status for message sender
     const senderFarmer = findFarmerByDiscordId(message.author.id);
@@ -992,7 +1066,8 @@ export function startDiscordBot(
       'rps',
       'deposit', 'withdraw',
       'rob', 'steal',
-      'team', 'heist', 'vault'
+      'team', 'heist', 'vault',
+      'ban', 'unban'
     ]);
 
     if (!VALID_COMMANDS.has(commandName)) return;
@@ -1238,13 +1313,21 @@ export function startDiscordBot(
         const targetFarmer = getOrCreateFarmerByDiscord(mentionedUser.id, mentionedUser.username);
         return sendEmbed(
           `💰 ${targetFarmer.name}'s Balance`,
-          `User **${targetFarmer.name}** holds **${targetFarmer.points} AP**!\n🔥 Daily Streak: **${targetFarmer.streak || 0} days**`,
+          `User **${targetFarmer.name}** balance:\n` +
+          `• **wallet :** ${(targetFarmer.points || 0).toLocaleString()} AP\n` +
+          `• **bank :** ${(targetFarmer.bankBalance || 0).toLocaleString()} AP\n` +
+          `• **total :** ${((targetFarmer.points || 0) + (targetFarmer.bankBalance || 0)).toLocaleString()} AP\n\n` +
+          `🔥 Daily Streak: **${targetFarmer.streak || 0} days**`,
           3447003
         );
       } else {
         return sendEmbed(
           `💰 Your Balance`,
-          `You hold **${farmer.points} AP**!\n🔥 Daily Streak: **${farmer.streak || 0} days**`,
+          `Your balance:\n` +
+          `• **wallet :** ${(farmer.points || 0).toLocaleString()} AP\n` +
+          `• **bank :** ${(farmer.bankBalance || 0).toLocaleString()} AP\n` +
+          `• **total :** ${((farmer.points || 0) + (farmer.bankBalance || 0)).toLocaleString()} AP\n\n` +
+          `🔥 Daily Streak: **${farmer.streak || 0} days**`,
           3447003
         );
       }
@@ -2013,12 +2096,13 @@ export function startDiscordBot(
     if (commandName === 'leaderboard' || commandName === 'lb') {
       const farmersList = Object.values(farmers);
       let activeCategory: 'points' | 'streak' | 'web_time' | 'invites' = 'points';
+      const walletOnly = args[0] === '-w';
 
       // Helper to generate the ActionRow for buttons
       const getLeaderboardRow = (currentCategory: 'points' | 'streak' | 'web_time' | 'invites') => {
         const pointsBtn = new ButtonBuilder()
           .setCustomId('lb_points')
-          .setLabel('Points 🪙')
+          .setLabel(walletOnly ? 'Wallet 🪙' : 'Points 🪙')
           .setStyle(currentCategory === 'points' ? ButtonStyle.Primary : ButtonStyle.Secondary);
 
         const streakBtn = new ButtonBuilder()
@@ -2039,7 +2123,7 @@ export function startDiscordBot(
         return new ActionRowBuilder<ButtonBuilder>().addComponents(pointsBtn, streakBtn, timeBtn, invitesBtn);
       };
 
-      const initialEmbed = getLeaderboardEmbed(activeCategory, farmersList);
+      const initialEmbed = getLeaderboardEmbed(activeCategory, farmersList, walletOnly);
       const initialRow = getLeaderboardRow(activeCategory);
 
       const replyMsg = await message.reply({
@@ -2076,7 +2160,7 @@ export function startDiscordBot(
           activeCategory = 'invites';
         }
 
-        const updatedEmbed = getLeaderboardEmbed(activeCategory, Object.values(farmers));
+        const updatedEmbed = getLeaderboardEmbed(activeCategory, Object.values(farmers), walletOnly);
         const updatedRow = getLeaderboardRow(activeCategory);
 
         await replyMsg.edit({
@@ -3282,6 +3366,238 @@ export function startDiscordBot(
         `Successfully reset **${targetFarmer.name}**'s points and streak to **0**!`,
         15158332 // Red
       );
+    }
+
+    // ==========================================
+    // 18.2 ADMIN: BAN COMMAND
+    // ==========================================
+    if (commandName === 'ban') {
+      if (!message.member?.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError('❌ This command is restricted to Discord Administrators only.');
+      }
+
+      const targetUser = message.mentions.users.first();
+      let targetFarmer: Farmer | null = null;
+      const searchName = args[0];
+
+      if (targetUser) {
+        targetFarmer = getOrCreateFarmerByDiscord(targetUser.id, targetUser.username);
+      } else if (searchName) {
+        const cleanSearch = searchName.toLowerCase().trim();
+        targetFarmer = Object.values(farmers).find(f => f.name.toLowerCase() === cleanSearch || f.discordUsername?.toLowerCase() === cleanSearch) || null;
+      }
+
+      if (!targetFarmer) {
+        return sendError('Please mention a valid user or specify an existing username to ban. (e.g. `+ban @user` or `+ban John`)');
+      }
+
+      const reason = args.slice(1).join(' ') || 'Violation of server rules.';
+      const cleanName = targetFarmer.name.toLowerCase();
+
+      if (bannedUsers) {
+        bannedUsers[cleanName] = {
+          username: targetFarmer.name,
+          discordId: targetFarmer.discordId || targetUser?.id,
+          bannedAt: Date.now(),
+          reason
+        };
+      }
+      saveData();
+
+      return sendEmbed(
+        '🚫 User Banned (Admin)',
+        `Successfully banned **${targetFarmer.name}** from the system!\n` +
+        `• **Reason:** ${reason}\n` +
+        `• Banned users are blocked from both web and bot interactions.`,
+        15158332 // Red
+      );
+    }
+
+    // ==========================================
+    // 18.3 ADMIN: UNBAN COMMAND
+    // ==========================================
+    if (commandName === 'unban') {
+      if (!message.member?.permissions.has(PermissionFlagsBits.Administrator)) {
+        return sendError('❌ This command is restricted to Discord Administrators only.');
+      }
+
+      const targetUser = message.mentions.users.first();
+      const searchName = args[0];
+
+      if (!searchName && !targetUser) {
+        return sendError('Please specify a username or mention a user to unban. (e.g. `+unban John` or `+unban @user`)');
+      }
+
+      let foundKey: string | null = null;
+      if (targetUser) {
+        foundKey = Object.keys(bannedUsers || {}).find(k => bannedUsers?.[k].discordId === targetUser.id) || null;
+      } else if (searchName) {
+        const cleanSearch = searchName.toLowerCase().trim();
+        foundKey = Object.keys(bannedUsers || {}).find(k => k === cleanSearch || bannedUsers?.[k].discordId === cleanSearch || bannedUsers?.[k].username.toLowerCase() === cleanSearch) || null;
+      }
+
+      if (!foundKey || !bannedUsers || !bannedUsers[foundKey]) {
+        return sendError(`User is not currently banned.`);
+      }
+
+      const displayName = bannedUsers[foundKey].username;
+      delete bannedUsers[foundKey];
+      saveData();
+
+      return sendEmbed(
+        '🟢 User Unbanned (Admin)',
+        `Successfully unbanned **${displayName}**! They can now access all web and bot features again.`,
+        3066993 // Green
+      );
+    }
+
+    // ==========================================
+    // 18.4 ADMIN: ADMIN ADD/REMOVE DYNAMIC COMMANDS
+    // ==========================================
+    if (commandName === 'admin') {
+      const isAuthorAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) || (systemAdmins && systemAdmins.includes(authorId));
+      if (!isAuthorAdmin) {
+        return sendError('❌ This command is restricted to Discord Administrators and Dynamic Bot Admins only.');
+      }
+
+      const subCommand = args[0]?.toLowerCase();
+      if (subCommand !== 'add' && subCommand !== 'remove') {
+        return sendError('Usage:\n• `+admin add @user`\n• `+admin remove @user`');
+      }
+
+      const targetUser = message.mentions.users.first();
+      if (!targetUser) {
+        return sendError(`Please mention a valid user to ${subCommand}. (e.g. \`+admin ${subCommand} @user\`)`);
+      }
+
+      if (!systemAdmins) {
+        return sendError('❌ Admin system is not initialized.');
+      }
+
+      if (subCommand === 'add') {
+        if (systemAdmins.includes(targetUser.id)) {
+          return sendError(`**${targetUser.username}** is already a dynamic administrator.`);
+        }
+        systemAdmins.push(targetUser.id);
+        saveData();
+        return sendEmbed(
+          '👑 Admin Added (Admin)',
+          `Successfully added **${targetUser.username}** (\`${targetUser.id}\`) to the dynamic administrators list!`,
+          3066993 // Green
+        );
+      } else {
+        if (targetUser.id === '840560998011502593') {
+          return sendError('❌ You cannot remove the master administrator.');
+        }
+        const idx = systemAdmins.indexOf(targetUser.id);
+        if (idx === -1) {
+          return sendError(`**${targetUser.username}** is not in the dynamic administrators list.`);
+        }
+        systemAdmins.splice(idx, 1);
+        saveData();
+        return sendEmbed(
+          '👑 Admin Removed (Admin)',
+          `Successfully removed **${targetUser.username}** (\`${targetUser.id}\`) from the dynamic administrators list.`,
+          15158332 // Red
+        );
+      }
+    }
+
+    // ==========================================
+    // 18.5 ADMIN: LOAD BACKUP COMMAND
+    // ==========================================
+    if (commandName === 'load') {
+      const isAuthorAdmin = message.member?.permissions.has(PermissionFlagsBits.Administrator) || (systemAdmins && systemAdmins.includes(authorId));
+      if (!isAuthorAdmin) {
+        return sendError('❌ This command is restricted to Discord Administrators and Dynamic Bot Admins only.');
+      }
+
+      if (args[0]?.toLowerCase() !== 'backup') {
+        return sendError('Usage: `+load backup` with a JSON backup file attached to your message.');
+      }
+
+      const attachment = message.attachments.first();
+      if (!attachment) {
+        return sendError('❌ Please attach a valid JSON backup file to this command.');
+      }
+
+      try {
+        const response = await fetch(attachment.url);
+        if (!response.ok) {
+          throw new Error('Failed to download the attachment file.');
+        }
+        const backupText = await response.text();
+        const parsed = JSON.parse(backupText);
+
+        if (!parsed.farmers) {
+          return sendError('❌ Invalid backup: missing `farmers` data structure.');
+        }
+
+        // Apply backup states back by mutating references
+        if (parsed.farmers) {
+          Object.keys(farmers).forEach(k => delete farmers[k]);
+          Object.assign(farmers, parsed.farmers);
+        }
+
+        if (parsed.lastDailyClaims && lastDailyClaims) {
+          Object.keys(lastDailyClaims).forEach(k => delete lastDailyClaims[k]);
+          Object.assign(lastDailyClaims, parsed.lastDailyClaims);
+        }
+
+        if (parsed.dailyBetEarnings && dailyBetEarnings) {
+          Object.keys(dailyBetEarnings).forEach(k => delete dailyBetEarnings[k]);
+          Object.assign(dailyBetEarnings, parsed.dailyBetEarnings);
+        }
+
+        if (parsed.presetRolePurchases && Array.isArray(parsed.presetRolePurchases) && presetRolePurchases) {
+          presetRolePurchases.length = 0;
+          presetRolePurchases.push(...parsed.presetRolePurchases);
+        }
+
+        if (parsed.redeemCodes && redeemCodes) {
+          Object.keys(redeemCodes).forEach(k => delete redeemCodes[k]);
+          Object.assign(redeemCodes, parsed.redeemCodes);
+        }
+
+        if (parsed.puzzleImages && Array.isArray(parsed.puzzleImages) && puzzleImages) {
+          puzzleImages.length = 0;
+          puzzleImages.push(...parsed.puzzleImages);
+        }
+
+        if (parsed.giveaways && Array.isArray(parsed.giveaways) && giveaways) {
+          giveaways.length = 0;
+          giveaways.push(...parsed.giveaways);
+        }
+
+        if (parsed.serverVault !== undefined && vaultState) {
+          vaultState.balance = parsed.serverVault;
+        }
+
+        if (parsed.bannedUsers && bannedUsers) {
+          Object.keys(bannedUsers).forEach(k => delete bannedUsers[k]);
+          Object.assign(bannedUsers, parsed.bannedUsers);
+        }
+
+        if (parsed.discordStats && discordStats) {
+          Object.keys(discordStats).forEach(k => delete (discordStats as any)[k]);
+          Object.assign(discordStats, parsed.discordStats);
+        }
+
+        if (parsed.systemAdmins && systemAdmins) {
+          systemAdmins.length = 0;
+          systemAdmins.push(...parsed.systemAdmins);
+        }
+
+        saveData();
+
+        return sendEmbed(
+          '💾 Backup Restored',
+          'Successfully loaded and restored all economy users, wallet/bank balances, and historic statistics from the attached backup!',
+          3066993 // Green
+        );
+      } catch (err: any) {
+        return sendError(`❌ Failed to parse or load backup: ${err.message || err}`);
+      }
     }
 
     // ==========================================

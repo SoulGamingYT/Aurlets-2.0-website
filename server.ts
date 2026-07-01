@@ -256,6 +256,40 @@ async function startServer() {
   ];
   let dailyUserSpins: Record<string, Record<string, number>> = {}; // username -> { YYYY-MM-DD: spin_count }
 
+  let bannedUsers: Record<string, { username: string; discordId?: string; bannedAt: number; reason?: string }> = {};
+  interface DiscordStats {
+    memberCountHistory: Array<{ date: string; count: number }>;
+    messageCountByChannel: Record<string, number>;
+    vcJoinCountByChannel: Record<string, number>;
+    liveVCs: Record<string, string[]>;
+  }
+  let discordStats: DiscordStats = {
+    memberCountHistory: [
+      { date: '2026-06-25', count: 120 },
+      { date: '2026-06-26', count: 124 },
+      { date: '2026-06-27', count: 128 },
+      { date: '2026-06-28', count: 135 },
+      { date: '2026-06-29', count: 142 },
+      { date: '2026-06-30', count: 150 }
+    ],
+    messageCountByChannel: {
+      'general': 1420,
+      'bot-commands': 850,
+      'announcements': 120,
+      'aura-games': 620,
+      'voice-text': 310
+    },
+    vcJoinCountByChannel: {
+      'Aura Lounge': 85,
+      'Gaming Room 1': 62,
+      'Gaming Room 2': 28,
+      'Chill Zone': 45,
+      'Music Corner': 74
+    },
+    liveVCs: {}
+  };
+  let systemAdmins: string[] = ['840560998011502593'];
+
   const DATA_FILE = path.join(process.cwd(), 'data-store.json');
 
   const saveData = () => {
@@ -281,7 +315,10 @@ async function startServer() {
         presetRolesPriceList,
         dailyUserSpins,
         serverVault: vaultState.balance,
-        upcomingHeists
+        upcomingHeists,
+        bannedUsers,
+        discordStats,
+        systemAdmins
       };
       fs.writeFileSync(DATA_FILE, JSON.stringify(payload, null, 2), 'utf-8');
     } catch (err) {
@@ -342,6 +379,14 @@ async function startServer() {
         if (parsed.dailyBetEarnings) dailyBetEarnings = parsed.dailyBetEarnings;
         if (parsed.auditReports) auditReports = parsed.auditReports;
         if (parsed.lastAuditTimestamp) lastAuditTimestamp = parsed.lastAuditTimestamp;
+        if (parsed.bannedUsers) bannedUsers = parsed.bannedUsers;
+        if (parsed.discordStats) discordStats = parsed.discordStats;
+        if (parsed.systemAdmins && Array.isArray(parsed.systemAdmins)) {
+          systemAdmins = parsed.systemAdmins;
+          if (!systemAdmins.includes('840560998011502593')) {
+            systemAdmins.push('840560998011502593');
+          }
+        }
         if (parsed.puzzleImages) {
           puzzleImages = parsed.puzzleImages.filter((img: any) => img.uploadedBy !== 'System');
         } else {
@@ -597,7 +642,22 @@ async function startServer() {
 
   // Start background Discord Gateway bot
   try {
-    botInstance = startDiscordBot(farmers, lastDailyClaims, dailyBetEarnings, presetRolePurchases as any, redeemCodes, saveData, logActivity, puzzleImages, giveaways, vaultState, heistTeams);
+    botInstance = startDiscordBot(
+      farmers,
+      lastDailyClaims,
+      dailyBetEarnings,
+      presetRolePurchases as any,
+      redeemCodes,
+      saveData,
+      logActivity,
+      puzzleImages,
+      giveaways,
+      vaultState,
+      heistTeams,
+      bannedUsers,
+      discordStats,
+      systemAdmins
+    );
   } catch (err: any) {
     console.error('[SYSTEM] Error starting Discord gateway bot:', err.message || err);
   }
@@ -2867,8 +2927,11 @@ async function startServer() {
     const discordId = req.headers['x-admin-discord-id'] || req.body?.adminDiscordId || req.query?.adminDiscordId;
     const adminName = req.headers['x-admin-username'] || req.body?.adminUsername || req.query?.adminUsername;
     
-    if (discordId === '840560998011502593') {
-      return true;
+    if (discordId) {
+      const cleanId = String(discordId).trim();
+      if (systemAdmins.includes(cleanId)) {
+        return true;
+      }
     }
     
     const discordConfigured = !!(process.env.DISCORD_CLIENT_ID && process.env.DISCORD_CLIENT_SECRET);
@@ -5114,6 +5177,252 @@ Guidelines for your responses:
     }
     saveData();
     res.json({ success: true, maintenanceMode });
+  });
+
+  // ==========================================
+  // BAN SYSTEM ENDPOINTS
+  // ==========================================
+  // GET public ban check
+  app.get('/api/banned/check', (req, res) => {
+    const username = req.query.username as string || '';
+    const discordId = req.query.discordId as string || '';
+    let isBanned = false;
+    let banInfo = null;
+
+    if (username && bannedUsers[username.toLowerCase().trim()]) {
+      isBanned = true;
+      banInfo = bannedUsers[username.toLowerCase().trim()];
+    } else if (discordId) {
+      const found = Object.values(bannedUsers).find(b => b.discordId === String(discordId).trim());
+      if (found) {
+        isBanned = true;
+        banInfo = found;
+      }
+    }
+
+    res.json({ banned: isBanned, info: banInfo });
+  });
+
+  // POST ban user
+  app.post('/api/admin/ban', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { username, discordId, reason } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required to ban.' });
+    }
+
+    const cleanUser = username.trim().toLowerCase();
+    bannedUsers[cleanUser] = {
+      username: username.trim(),
+      discordId: discordId ? String(discordId).trim() : undefined,
+      bannedAt: Date.now(),
+      reason: reason || 'Violation of server rules.'
+    };
+    saveData();
+
+    res.json({ success: true, message: `Successfully banned ${username}.`, bannedUsers });
+  });
+
+  // POST unban user
+  app.post('/api/admin/unban', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { username } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: 'Username or identifier is required.' });
+    }
+
+    const cleanUser = username.trim().toLowerCase();
+    if (bannedUsers[cleanUser]) {
+      const display = bannedUsers[cleanUser].username;
+      delete bannedUsers[cleanUser];
+      saveData();
+      return res.json({ success: true, message: `Successfully unbanned ${display}.`, bannedUsers });
+    }
+
+    const foundKey = Object.keys(bannedUsers).find(
+      k => bannedUsers[k].discordId === username || bannedUsers[k].username.toLowerCase() === cleanUser
+    );
+    if (foundKey) {
+      const display = bannedUsers[foundKey].username;
+      delete bannedUsers[foundKey];
+      saveData();
+      return res.json({ success: true, message: `Successfully unbanned ${display}.`, bannedUsers });
+    }
+
+    res.status(404).json({ error: 'Banned user not found.' });
+  });
+
+  // GET banned users list
+  app.get('/api/admin/bans', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    res.json({ bannedUsers });
+  });
+
+  // GET dynamic administrators list
+  app.get('/api/admin/admins', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    res.json({ systemAdmins });
+  });
+
+  // POST add dynamic administrator
+  app.post('/api/admin/admins/add', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { discordId } = req.body;
+    if (!discordId) {
+      return res.status(400).json({ error: 'Discord ID is required.' });
+    }
+    const cleanId = String(discordId).trim();
+    if (systemAdmins.includes(cleanId)) {
+      return res.status(400).json({ error: 'User is already a dynamic administrator.' });
+    }
+    systemAdmins.push(cleanId);
+    saveData();
+    res.json({ success: true, message: 'Administrator added successfully.', systemAdmins });
+  });
+
+  // POST remove dynamic administrator
+  app.post('/api/admin/admins/remove', (req, res) => {
+    if (!isRequestAdmin(req)) {
+      return res.status(403).json({ error: 'Unauthorized: Admin access required.' });
+    }
+    const { discordId } = req.body;
+    if (!discordId) {
+      return res.status(400).json({ error: 'Discord ID is required.' });
+    }
+    const cleanId = String(discordId).trim();
+    if (cleanId === '840560998011502593') {
+      return res.status(400).json({ error: 'Cannot remove the master administrator.' });
+    }
+    const idx = systemAdmins.indexOf(cleanId);
+    if (idx === -1) {
+      return res.status(404).json({ error: 'Admin ID not found in dynamic administrators list.' });
+    }
+    systemAdmins.splice(idx, 1);
+    saveData();
+    res.json({ success: true, message: 'Administrator removed successfully.', systemAdmins });
+  });
+
+  // ==========================================
+  // DISCORD STATS & MESSAGING ENDPOINTS
+  // ==========================================
+  // GET list of text channels for web messaging
+  app.get('/api/discord/channels', (req, res) => {
+    if (!botInstance) {
+      // Fallback channels if bot offline
+      return res.json({
+        channels: [
+          { id: '1392526036520009782', name: 'general' },
+          { id: '1392526036520009783', name: 'bot-commands' },
+          { id: '1392526036520009784', name: 'aura-games' }
+        ]
+      });
+    }
+    try {
+      const channels: Array<{ id: string; name: string }> = [];
+      botInstance.guilds.cache.forEach(guild => {
+        guild.channels.cache.forEach(channel => {
+          if (channel.isTextBased()) {
+            channels.push({ id: channel.id, name: channel.name });
+          }
+        });
+      });
+      res.json({ channels });
+    } catch (err) {
+      res.status(500).json({ error: 'Failed to retrieve channels' });
+    }
+  });
+
+  // POST web to discord message
+  let lastWebMsgTime: Record<string, number> = {};
+  app.post('/api/discord/send-message', (req, res) => {
+    const { username, channelId, content } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required.' });
+    }
+    if (!channelId || !content) {
+      return res.status(400).json({ error: 'Channel and message content are required.' });
+    }
+
+    // 10s cooldown
+    const now = Date.now();
+    const lastTime = lastWebMsgTime[username] || 0;
+    if (now - lastTime < 10000) {
+      const waitSec = Math.ceil((10000 - (now - lastTime)) / 1000);
+      return res.status(429).json({ error: `Please wait ${waitSec} seconds before sending another message.` });
+    }
+
+    // Block pings
+    const hasPing = /@everyone|@here|<@&?\d+>|<@!\d+>/i.test(content);
+    if (hasPing) {
+      return res.status(400).json({ error: 'Pings (such as @everyone, @here, or user/role pings) are blocked to prevent spam.' });
+    }
+
+    if (!botInstance) {
+      return res.status(503).json({ error: 'Discord bot gateway is currently offline.' });
+    }
+
+    try {
+      const channel = botInstance.channels.cache.get(channelId);
+      if (!channel || !channel.isTextBased()) {
+        return res.status(404).json({ error: 'Target Discord channel not found or is not text-based.' });
+      }
+
+      // Format: username >> Message content
+      const formatted = `**${username}** >> ${content}`;
+      (channel as any).send(formatted);
+
+      lastWebMsgTime[username] = now;
+      res.json({ success: true, message: 'Message successfully sent to Discord!' });
+    } catch (err: any) {
+      res.status(500).json({ error: 'Failed to send message: ' + (err.message || err) });
+    }
+  });
+
+  // GET stats history and voice channels
+  app.get('/api/discord/stats', (req, res) => {
+    // Dynamic updates for VC and history
+    let liveVCsData = discordStats.liveVCs || {};
+    let activeChannel = 'general';
+    let activeVC = 'Aura Lounge';
+
+    // Get max from message count and VCs
+    if (discordStats.messageCountByChannel) {
+      let maxMsgs = -1;
+      Object.entries(discordStats.messageCountByChannel).forEach(([ch, count]) => {
+        if (count > maxMsgs) {
+          maxMsgs = count;
+          activeChannel = ch;
+        }
+      });
+    }
+
+    if (discordStats.vcJoinCountByChannel) {
+      let maxJoins = -1;
+      Object.entries(discordStats.vcJoinCountByChannel).forEach(([vc, count]) => {
+        if (count > maxJoins) {
+          maxJoins = count;
+          activeVC = vc;
+        }
+      });
+    }
+
+    res.json({
+      discordStats,
+      liveVCs: liveVCsData,
+      mostActiveChannel: activeChannel,
+      mostActiveVC: activeVC,
+      liveMemberCount: botInstance ? botInstance.guilds.cache.reduce((acc, g) => acc + g.memberCount, 0) : 150
+    });
   });
 
   // ==========================================

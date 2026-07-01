@@ -61,7 +61,165 @@ export default function AdminPanel({
   discordConfigured,
   onPointsUpdated
 }: AdminPanelProps) {
-  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles' | 'maintenance' | 'shop' | 'heist'>('users');
+  const [activeSubTab, setActiveSubTab] = useState<'users' | 'codes' | 'audit' | 'backup' | 'puzzles' | 'maintenance' | 'shop' | 'heist' | 'bans' | 'admins'>('users');
+  
+  // Bans and Dynamic Admins States
+  const [bannedUsersList, setBannedUsersList] = useState<Record<string, { username: string; discordId?: string; bannedAt: number; reason?: string }>>({});
+  const [adminsList, setAdminsList] = useState<string[]>([]);
+  const [banUsername, setBanUsername] = useState('');
+  const [banDiscordId, setBanDiscordId] = useState('');
+  const [banReason, setBanReason] = useState('');
+  const [newAdminId, setNewAdminId] = useState('');
+  const [isLoadingBans, setIsLoadingBans] = useState(false);
+  const [isLoadingAdmins, setIsLoadingAdmins] = useState(false);
+
+  const fetchBannedUsers = async () => {
+    setIsLoadingBans(true);
+    try {
+      const res = await fetch('/api/admin/bans', {
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setBannedUsersList(data.bannedUsers || {});
+      }
+    } catch (err) {
+      console.error('Failed to fetch banned users:', err);
+    } finally {
+      setIsLoadingBans(false);
+    }
+  };
+
+  const handleBanUser = async () => {
+    if (!banUsername.trim()) {
+      showNotice('Please enter a username to ban.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/ban', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({
+          username: banUsername.trim(),
+          discordId: banDiscordId.trim() || undefined,
+          reason: banReason.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice(data.message || 'Successfully banned user.', 'success');
+        setBanUsername('');
+        setBanDiscordId('');
+        setBanReason('');
+        fetchBannedUsers();
+      } else {
+        showNotice(data.error || 'Failed to ban user.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    }
+  };
+
+  const handleUnbanUser = async (username: string) => {
+    try {
+      const res = await fetch('/api/admin/unban', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ username })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice(data.message || 'Successfully unbanned user.', 'success');
+        fetchBannedUsers();
+      } else {
+        showNotice(data.error || 'Failed to unban user.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    }
+  };
+
+  const fetchAdmins = async () => {
+    setIsLoadingAdmins(true);
+    try {
+      const res = await fetch('/api/admin/admins', {
+        headers: {
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAdminsList(data.systemAdmins || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch admins:', err);
+    } finally {
+      setIsLoadingAdmins(false);
+    }
+  };
+
+  const handleAddAdmin = async () => {
+    if (!newAdminId.trim()) {
+      showNotice('Please enter a Discord ID.', 'error');
+      return;
+    }
+    try {
+      const res = await fetch('/api/admin/admins/add', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ discordId: newAdminId.trim() })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice(data.message || 'Successfully added administrator.', 'success');
+        setNewAdminId('');
+        fetchAdmins();
+      } else {
+        showNotice(data.error || 'Failed to add administrator.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    }
+  };
+
+  const handleRemoveAdmin = async (discordId: string) => {
+    try {
+      const res = await fetch('/api/admin/admins/remove', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-discord-id': adminDiscordId,
+          'x-admin-username': adminUsername
+        },
+        body: JSON.stringify({ discordId })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showNotice(data.message || 'Successfully removed administrator.', 'success');
+        fetchAdmins();
+      } else {
+        showNotice(data.error || 'Failed to remove administrator.', 'error');
+      }
+    } catch (err: any) {
+      showNotice(err.message, 'error');
+    }
+  };
   
   // States for Shop Config
   const [customRolePrice, setCustomRolePrice] = useState<number>(49999);
@@ -1075,6 +1233,32 @@ export default function AdminPanel({
             }`}
           >
             <Calendar className="w-4 h-4 text-pink-400 animate-pulse" /> Vault Heist Console 💎
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('bans');
+              fetchBannedUsers();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'bans'
+                ? 'bg-red-600 text-white shadow shadow-red-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <AlertTriangle className="w-4 h-4 text-red-400" /> Ban List 🚫
+          </button>
+          <button
+            onClick={() => {
+              setActiveSubTab('admins');
+              fetchAdmins();
+            }}
+            className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 ${
+              activeSubTab === 'admins'
+                ? 'bg-purple-600 text-white shadow shadow-purple-500/10'
+                : 'bg-zinc-900/40 text-zinc-400 hover:text-zinc-200 border border-zinc-900'
+            }`}
+          >
+            <UserCheck className="w-4 h-4 text-purple-400" /> Dynamic Admins 👑
           </button>
         </div>
 
@@ -2441,6 +2625,189 @@ export default function AdminPanel({
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'bans' && (
+        <div className="space-y-6 text-left animate-fade-in">
+          <div className="border-b border-zinc-900 pb-3">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-red-500" /> Administrative Ban System 🚫
+            </h3>
+            <p className="text-zinc-400 text-xs font-medium">
+              Ban or unban users from both the website features and Discord economy bot commands.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5">
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-4">
+                <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400">
+                  🚫 Restrict User Account
+                </h4>
+
+                <div className="space-y-3 font-mono text-xs">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-zinc-500 font-bold uppercase">Target Username (Required)</label>
+                    <input
+                      type="text"
+                      value={banUsername}
+                      onChange={(e) => setBanUsername(e.target.value)}
+                      placeholder="e.g. JohnDoe"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-zinc-500 font-bold uppercase">Target Discord ID (Optional)</label>
+                    <input
+                      type="text"
+                      value={banDiscordId}
+                      onChange={(e) => setBanDiscordId(e.target.value)}
+                      placeholder="e.g. 123456789012345678"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-zinc-500 font-bold uppercase">Reason for Ban</label>
+                    <textarea
+                      value={banReason}
+                      onChange={(e) => setBanReason(e.target.value)}
+                      placeholder="e.g. Violation of server rules."
+                      className="w-full h-20 px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white resize-none"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleBanUser}
+                    className="w-full py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs uppercase tracking-wider transition-all"
+                  >
+                    Apply Ban Restriction
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-7">
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-4">
+                <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400">
+                  📋 Currently Restricted Accounts ({Object.keys(bannedUsersList).length})
+                </h4>
+
+                {isLoadingBans ? (
+                  <div className="text-zinc-500 font-mono text-xs text-center py-8">Loading restricted users...</div>
+                ) : Object.keys(bannedUsersList).length === 0 ? (
+                  <div className="text-zinc-500 font-mono text-xs text-center py-8">No accounts are currently banned.</div>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {Object.entries(bannedUsersList).map(([key, info]) => (
+                      <div key={key} className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-850 flex items-center justify-between gap-4 font-mono text-xs">
+                        <div className="text-left space-y-1">
+                          <div className="font-bold text-white text-sm">{info.username}</div>
+                          {info.discordId && <div className="text-[10px] text-zinc-500">Discord ID: {info.discordId}</div>}
+                          <div className="text-[10px] text-red-400">Reason: {info.reason}</div>
+                          <div className="text-[9px] text-zinc-500">Banned on: {new Date(info.bannedAt).toLocaleString()}</div>
+                        </div>
+                        <button
+                          onClick={() => handleUnbanUser(info.username)}
+                          className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-emerald-950/40 border border-zinc-850 hover:border-emerald-900 text-zinc-400 hover:text-emerald-400 transition-all font-bold text-[10px] uppercase"
+                        >
+                          Unban
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeSubTab === 'admins' && (
+        <div className="space-y-6 text-left animate-fade-in">
+          <div className="border-b border-zinc-900 pb-3">
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <UserCheck className="w-5 h-5 text-purple-500" /> Dynamic Administrator System 👑
+            </h3>
+            <p className="text-zinc-400 text-xs font-medium">
+              Grant or revoke developer administrative access to users by inputting their Discord ID.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            <div className="lg:col-span-5">
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-4">
+                <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400">
+                  👑 Appoint New Administrator
+                </h4>
+
+                <div className="space-y-3 font-mono text-xs">
+                  <div className="space-y-1">
+                    <label className="text-[10px] text-zinc-500 font-bold uppercase">Discord User ID</label>
+                    <input
+                      type="text"
+                      value={newAdminId}
+                      onChange={(e) => setNewAdminId(e.target.value)}
+                      placeholder="e.g. 123456789012345678"
+                      className="w-full px-3 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-white"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleAddAdmin}
+                    className="w-full py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs uppercase tracking-wider transition-all"
+                  >
+                    Grant Admin Access
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-7">
+              <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow-xl space-y-4">
+                <h4 className="text-xs font-mono font-black uppercase tracking-wider text-zinc-400">
+                  📋 Dynamic Administrator Accounts ({adminsList.length})
+                </h4>
+
+                {isLoadingAdmins ? (
+                  <div className="text-zinc-500 font-mono text-xs text-center py-8">Loading administrators...</div>
+                ) : adminsList.length === 0 ? (
+                  <div className="text-zinc-500 font-mono text-xs text-center py-8">No dynamic admins defined yet.</div>
+                ) : (
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {adminsList.map((id) => (
+                      <div key={id} className="p-3.5 rounded-xl bg-zinc-900/40 border border-zinc-850 flex items-center justify-between gap-4 font-mono text-xs">
+                        <div className="text-left space-y-1">
+                          <div className="font-bold text-white text-sm flex items-center gap-1.5 font-mono">
+                            👑 Discord ID: <span className="text-purple-400">{id}</span>
+                          </div>
+                          {id === '840560998011502593' ? (
+                            <span className="text-[9px] bg-purple-500/15 border border-purple-500/30 text-purple-400 px-1.5 py-0.5 rounded uppercase font-black font-sans">
+                              Master Developer Admin
+                            </span>
+                          ) : (
+                            <span className="text-[9px] bg-zinc-500/10 border border-zinc-500/20 text-zinc-400 px-1.5 py-0.5 rounded uppercase font-bold font-sans">
+                              Dynamic Appointed
+                            </span>
+                          )}
+                        </div>
+                        {id !== '840560998011502593' && (
+                          <button
+                            onClick={() => handleRemoveAdmin(id)}
+                            className="px-3 py-1.5 rounded-lg bg-zinc-950 hover:bg-red-950/40 border border-zinc-850 hover:border-red-900 text-zinc-400 hover:text-red-400 transition-all font-bold text-[10px] uppercase"
+                          >
+                            Revoke
+                          </button>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

@@ -65,7 +65,45 @@ export default function AuraGames({
     }
   }, [propPlayerName]);
 
-  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'higherlower' | 'rps' | 'bank' | 'spin' | null>(null);
+  const [activeGame, setActiveGame] = useState<'math' | 'kotd' | 'betting' | 'puzzle' | 'higherlower' | 'rps' | 'bank' | 'spin' | 'tictactoe' | 'hangman' | 'scramble' | null>(null);
+
+  // --- TIC TAC TOE GAME STATE ---
+  const [tttBoard, setTttBoard] = useState<(string | null)[]>(Array(9).fill(null));
+  const [tttWinner, setTttWinner] = useState<string | null>(null); // 'X', 'O', 'draw', null
+  const [tttIsAILoading, setTttIsAILoading] = useState<boolean>(false);
+
+  // --- HANGMAN GAME STATE ---
+  const HANGMAN_WORDS = [
+    { word: 'REACT', hint: 'A popular frontend web library' },
+    { word: 'DISCORD', hint: 'The platform hosting our beautiful community' },
+    { word: 'AURAFLOW', hint: 'A state of absolute design perfection' },
+    { word: 'TYPESCRIPT', hint: 'Strict syntactical superset of JavaScript' },
+    { word: 'TAILWIND', hint: 'A utility-first CSS framework for rapid UI styling' },
+    { word: 'BLOCKCHAIN', hint: 'Decentralized distributed ledger tech' },
+    { word: 'SOLIDITY', hint: 'Language used to write smart contracts' },
+    { word: 'DEVELOPER', hint: 'A builder of virtual software universes' }
+  ];
+  const [hangmanWord, setHangmanWord] = useState<string>('REACT');
+  const [hangmanHint, setHangmanHint] = useState<string>('A popular frontend web library');
+  const [hangmanGuessed, setHangmanGuessed] = useState<string[]>([]);
+  const [hangmanLives, setHangmanLives] = useState<number>(6);
+
+  // --- WORD SCRAMBLE GAME STATE ---
+  const SCRAMBLE_WORDS = [
+    { word: 'VARIABLE', hint: 'A storage location paired with an associated symbolic name' },
+    { word: 'COMPILER', hint: 'Translates source code into machine code' },
+    { word: 'DATABASE', hint: 'An organized collection of structured information or data' },
+    { word: 'FUNCTION', hint: 'A set of statements that performs a task or calculates a value' },
+    { word: 'SERVER', hint: 'A computer program or device that provides a service to another' },
+    { word: 'GITHUB', hint: 'Platform for version control and software collaboration' },
+    { word: 'INTERNET', hint: 'A global computer network providing information and communication' }
+  ];
+  const [scrambleWord, setScrambleWord] = useState<string>('');
+  const [scrambleScrambled, setScrambleScrambled] = useState<string>('');
+  const [scrambleHint, setScrambleHint] = useState<string>('');
+  const [scrambleInput, setScrambleInput] = useState<string>('');
+  const [scrambleSolved, setScrambleSolved] = useState<boolean>(false);
+  const [scrambleFeedback, setScrambleFeedback] = useState<string>('');
 
   // Rules visibility states
   const [showMathRules, setShowMathRules] = useState<boolean>(false);
@@ -340,6 +378,174 @@ export default function AuraGames({
     const interval = setInterval(syncGameState, 1000);
     return () => clearInterval(interval);
   }, [activeGame, playerId, playerName]);
+
+  // --- NEW AURA GAMES ACTIONS ---
+  // --- TIC TAC TOE FUNCTIONS ---
+  const resetTtt = () => {
+    setTttBoard(Array(9).fill(null));
+    setTttWinner(null);
+    setTttIsAILoading(false);
+  };
+
+  const handleTttClick = (index: number) => {
+    if (tttBoard[index] || tttWinner || tttIsAILoading) return;
+
+    const newBoard = [...tttBoard];
+    newBoard[index] = 'X';
+    setTttBoard(newBoard);
+
+    const win = checkTttWinner(newBoard);
+    if (win) {
+      setTttWinner(win);
+      handleTttGameOver(win);
+      return;
+    }
+
+    setTttIsAILoading(true);
+    setTimeout(() => {
+      const aiBoard = [...newBoard];
+      const emptyIndices = aiBoard.map((val, idx) => val === null ? idx : null).filter(val => val !== null) as number[];
+      if (emptyIndices.length > 0) {
+        const randomChoice = emptyIndices[Math.floor(Math.random() * emptyIndices.length)];
+        aiBoard[randomChoice] = 'O';
+        setTttBoard(aiBoard);
+
+        const aiWin = checkTttWinner(aiBoard);
+        if (aiWin) {
+          setTttWinner(aiWin);
+          handleTttGameOver(aiWin);
+        }
+      } else {
+        setTttWinner('draw');
+        handleTttGameOver('draw');
+      }
+      setTttIsAILoading(false);
+    }, 500);
+  };
+
+  const checkTttWinner = (board: (string | null)[]) => {
+    const lines = [
+      [0, 1, 2], [3, 4, 5], [6, 7, 8],
+      [0, 3, 6], [1, 4, 7], [2, 5, 8],
+      [0, 4, 8], [2, 4, 6]
+    ];
+    for (const [a, b, c] of lines) {
+      if (board[a] && board[a] === board[b] && board[a] === board[c]) {
+        return board[a];
+      }
+    }
+    if (board.every(cell => cell !== null)) {
+      return 'draw';
+    }
+    return null;
+  };
+
+  const handleTttGameOver = (result: string) => {
+    if (!isLoggedIn) return;
+    if (result === 'X') {
+      updatePointsOnServer(15, 'Tic Tac Toe Victory! ⭕❌');
+    } else if (result === 'draw') {
+      updatePointsOnServer(5, 'Tic Tac Toe Draw!');
+    }
+  };
+
+  const updatePointsOnServer = async (amount: number, reason: string) => {
+    try {
+      const res = await fetch('/api/admin/user/points', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-username': 'Admin'
+        },
+        body: JSON.stringify({
+          name: playerName,
+          action: 'add',
+          points: amount,
+          type: 'points'
+        })
+      });
+      if (res.ok) {
+        if (setPoints) {
+          setPoints(prev => prev + amount);
+        }
+        if (showNotice) {
+          showNotice(`🎉 +${amount} AP gained from ${reason}!`, 'success');
+        }
+      }
+    } catch (err) {
+      console.error('Error awarding points:', err);
+    }
+  };
+
+  // --- HANGMAN FUNCTIONS ---
+  const startHangman = () => {
+    const item = HANGMAN_WORDS[Math.floor(Math.random() * HANGMAN_WORDS.length)];
+    setHangmanWord(item.word);
+    setHangmanHint(item.hint);
+    setHangmanGuessed([]);
+    setHangmanLives(6);
+  };
+
+  const handleHangmanGuess = (letter: string) => {
+    if (hangmanGuessed.includes(letter) || hangmanLives <= 0 || isHangmanWon()) return;
+
+    const newGuessed = [...hangmanGuessed, letter];
+    setHangmanGuessed(newGuessed);
+
+    if (!hangmanWord.includes(letter)) {
+      const newLives = hangmanLives - 1;
+      setHangmanLives(newLives);
+      if (newLives <= 0) {
+        if (showNotice) showNotice(`💀 Game Over! The word was "${hangmanWord}".`, 'error');
+      }
+    } else {
+      const wordLetters = hangmanWord.split('');
+      const isWin = wordLetters.every(l => newGuessed.includes(l));
+      if (isWin) {
+        if (showNotice) showNotice(`🎉 You solved Hangman! Gained +20 AP!`, 'success');
+        updatePointsOnServer(20, 'Hangman Victory! 🪓');
+      }
+    }
+  };
+
+  const isHangmanWon = () => {
+    return hangmanWord.split('').every(l => hangmanGuessed.includes(l));
+  };
+
+  // --- WORD SCRAMBLE FUNCTIONS ---
+  const startScramble = () => {
+    const item = SCRAMBLE_WORDS[Math.floor(Math.random() * SCRAMBLE_WORDS.length)];
+    setScrambleWord(item.word);
+    setScrambleHint(item.hint);
+    setScrambleInput('');
+    setScrambleSolved(false);
+    setScrambleFeedback('');
+
+    let arr = item.word.split('');
+    let attempts = 0;
+    while (attempts < 10) {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      if (arr.join('') !== item.word) break;
+      attempts++;
+    }
+    setScrambleScrambled(arr.join(''));
+  };
+
+  const checkScrambleGuess = () => {
+    if (scrambleSolved) return;
+
+    if (scrambleInput.trim().toUpperCase() === scrambleWord) {
+      setScrambleSolved(true);
+      setScrambleFeedback('🎉 Correct! Magnificent solving skills.');
+      if (showNotice) showNotice('🎉 Word Scramble Solved! Gained +15 AP!', 'success');
+      updatePointsOnServer(15, 'Word Scramble Solving! 📝');
+    } else {
+      setScrambleFeedback('❌ Incorrect. Focus your aura and try again!');
+    }
+  };
 
   // --- MATHS LOBBY HANDLERS ---
   const startMathGame = async () => {
@@ -811,7 +1017,7 @@ export default function AuraGames({
                 <h3 className="text-sm font-black text-zinc-300 tracking-wider uppercase font-mono">🧠 Strategy & Logic Games</h3>
               </div>
               
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Maths Game Selector */}
                 <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-purple-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
                   <div className="space-y-3">
@@ -912,6 +1118,90 @@ export default function AuraGames({
                     >
                       <Link2 className="w-4.5 h-4.5" />
                     </button>
+                  </div>
+                </div>
+
+                {/* Tic Tac Toe Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-cyan-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-widest bg-cyan-500/10 border border-cyan-500/20 px-3 py-1 rounded-full inline-block">
+                      Classic Board
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Aura Tic-Tac-Toe</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Pit your logical foresight against an intelligent AI in a classic 3x3 duel. Defeat the AI to claim a swift 15 Aura Points bounty!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Play Tic Tac Toe against a smart AI" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('tictactoe');
+                            resetTtt();
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Play className="w-4.5 h-4.5" /> Play Duel
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Hangman Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-amber-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-amber-400 uppercase tracking-widest bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full inline-block">
+                      Vocabulary Duel
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Aura Tech Hangman</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Guess secret programming and community terminology letter-by-letter. Retain your lives and unlock an absolute 20 Aura Points treasure!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Guess letters to solve the hidden word" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('hangman');
+                            startHangman();
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Play className="w-4.5 h-4.5" /> Play Hangman
+                        </button>
+                      </Tooltip>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Word Scramble Selector */}
+                <div className="p-6 rounded-2xl bg-zinc-900/40 border border-zinc-800/80 hover:border-violet-500/30 transition-all flex flex-col justify-between space-y-6 h-full shadow-xl">
+                  <div className="space-y-3">
+                    <span className="text-xs font-mono font-bold text-violet-400 uppercase tracking-widest bg-violet-500/10 border border-violet-500/20 px-3 py-1 rounded-full inline-block">
+                      Anagram Solver
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Aura Word Scramble</h3>
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      Unscramble randomized characters of vital computer science terms. Prove your word supremacy and harvest 15 Aura Points!
+                    </p>
+                  </div>
+                  <div className="flex gap-2 w-full">
+                    <div className="flex-1">
+                      <Tooltip content="Unscramble letters to find the word" position="top">
+                        <button
+                          onClick={() => {
+                            setActiveGame('scramble');
+                            startScramble();
+                          }}
+                          className="w-full py-3.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white font-bold transition-all text-sm active:scale-95 flex items-center justify-center gap-2"
+                        >
+                          <Play className="w-4.5 h-4.5" /> Unscramble
+                        </button>
+                      </Tooltip>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1837,6 +2127,282 @@ export default function AuraGames({
               onBack={() => setActiveGame(null)}
               isAdmin={isAdmin}
             />
+          </motion.div>
+        ) : activeGame === 'tictactoe' ? (
+          <motion.div
+            key="tictactoe-game"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="p-6 rounded-2xl bg-zinc-950 border border-zinc-800 text-center space-y-6 shadow-2xl relative max-w-lg mx-auto"
+          >
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-4">
+              <div className="flex items-center gap-3 text-left">
+                <button
+                  onClick={() => setActiveGame(null)}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Aura Tic-Tac-Toe</h3>
+                  <p className="text-xs text-zinc-400">Play against our intelligent robot AI</p>
+                </div>
+              </div>
+              <button
+                onClick={resetTtt}
+                className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-cyan-500 hover:bg-cyan-500/10 text-zinc-400 hover:text-cyan-400 transition-all"
+                title="Restart Game"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Game Status */}
+              <div className="py-2 px-4 rounded-xl bg-zinc-900 border border-zinc-800 inline-block font-mono text-sm">
+                {tttWinner === 'X' ? (
+                  <span className="text-emerald-400 font-bold">🎉 VICTORY! +15 AP Gained!</span>
+                ) : tttWinner === 'O' ? (
+                  <span className="text-rose-400 font-bold">💀 DEFEAT! AI Outsmarted You.</span>
+                ) : tttWinner === 'draw' ? (
+                  <span className="text-yellow-400 font-bold">🤝 DRAW! +5 AP Awarded!</span>
+                ) : tttIsAILoading ? (
+                  <span className="text-cyan-400 animate-pulse flex items-center gap-2 justify-center">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> AI is thinking...
+                  </span>
+                ) : (
+                  <span className="text-zinc-300">Your Turn (Play as <span className="text-cyan-400 font-bold">X</span>)</span>
+                )}
+              </div>
+
+              {/* Grid 3x3 */}
+              <div className="grid grid-cols-3 gap-3 w-72 h-72 mx-auto mt-4">
+                {tttBoard.map((cell, idx) => (
+                  <button
+                    key={idx}
+                    disabled={!!cell || !!tttWinner || tttIsAILoading}
+                    onClick={() => handleTttClick(idx)}
+                    className={`rounded-2xl border flex items-center justify-center text-4xl font-black font-mono transition-all duration-200 shadow-lg ${
+                      cell === 'X'
+                        ? 'bg-cyan-500/10 border-cyan-500/50 text-cyan-400 scale-95 shadow-cyan-500/10'
+                        : cell === 'O'
+                        ? 'bg-rose-500/10 border-rose-500/50 text-rose-400 scale-95 shadow-rose-500/10'
+                        : 'bg-zinc-900 border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800 hover:-translate-y-0.5 active:scale-95'
+                    }`}
+                  >
+                    {cell}
+                  </button>
+                ))}
+              </div>
+
+              <div className="text-xs text-zinc-500 max-w-xs mx-auto pt-2">
+                * Note: You must be logged in with Discord to harvest Aura Points rewards for victory/draws.
+              </div>
+            </div>
+          </motion.div>
+        ) : activeGame === 'hangman' ? (
+          <motion.div
+            key="hangman-game"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="p-6 rounded-2xl bg-zinc-950 border border-zinc-800 text-center space-y-6 shadow-2xl relative max-w-xl mx-auto"
+          >
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-4">
+              <div className="flex items-center gap-3 text-left">
+                <button
+                  onClick={() => setActiveGame(null)}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Aura Tech Hangman</h3>
+                  <p className="text-xs text-zinc-400">Guess tech and programming terminology</p>
+                </div>
+              </div>
+              <button
+                onClick={startHangman}
+                className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-amber-500 hover:bg-amber-500/10 text-zinc-400 hover:text-amber-400 transition-all"
+                title="New Word"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Clue/Hint */}
+              <div className="p-4 rounded-xl bg-zinc-900/40 border border-zinc-800/80 text-zinc-300 text-sm">
+                <span className="font-bold text-amber-400 font-mono text-xs uppercase tracking-wider block mb-1">💡 Clue / Category Hint</span>
+                {hangmanHint}
+              </div>
+
+              {/* Word Display */}
+              <div className="flex justify-center gap-3 flex-wrap py-4">
+                {hangmanWord.split('').map((letter, idx) => {
+                  const revealed = hangmanGuessed.includes(letter);
+                  return (
+                    <div
+                      key={idx}
+                      className={`w-12 h-14 rounded-xl border flex items-center justify-center text-2xl font-black font-mono transition-all duration-300 ${
+                        revealed
+                          ? 'bg-amber-500/15 border-amber-500/50 text-amber-400'
+                          : 'bg-zinc-900 border-zinc-800 text-transparent'
+                      }`}
+                    >
+                      {revealed ? letter : '_'}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Hearts / Lives */}
+              <div className="flex items-center justify-center gap-2">
+                <span className="text-sm font-mono text-zinc-400 mr-2">Remaining attempts:</span>
+                {Array(6).fill(null).map((_, idx) => (
+                  <Heart
+                    key={idx}
+                    className={`w-5 h-5 transition-all duration-300 ${
+                      idx < hangmanLives
+                        ? 'text-rose-500 fill-rose-500 scale-100'
+                        : 'text-zinc-800 fill-none scale-90'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              {/* Win / Loss Overlay / Status */}
+              {isHangmanWon() ? (
+                <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold font-mono text-sm animate-bounce">
+                  🏆 VICTORY! Word Solved successfully. +20 AP credited!
+                </div>
+              ) : hangmanLives <= 0 ? (
+                <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-400 font-bold font-mono text-sm">
+                  💀 DEFEATED! The secret word was <span className="underline font-black text-white">{hangmanWord}</span>.
+                </div>
+              ) : null}
+
+              {/* Alphabet Keyboard */}
+              <div className="grid grid-cols-7 gap-2 max-w-md mx-auto">
+                {'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter) => {
+                  const guessed = hangmanGuessed.includes(letter);
+                  const isCorrect = hangmanWord.includes(letter);
+                  return (
+                    <button
+                      key={letter}
+                      disabled={guessed || hangmanLives <= 0 || isHangmanWon()}
+                      onClick={() => handleHangmanGuess(letter)}
+                      className={`py-2 rounded-lg font-bold font-mono text-sm border transition-all ${
+                        guessed
+                          ? isCorrect
+                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-500/50 cursor-not-allowed'
+                            : 'bg-rose-500/10 border-rose-500/30 text-rose-500/50 cursor-not-allowed'
+                          : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:border-zinc-600 hover:bg-zinc-800 active:scale-95'
+                      }`}
+                    >
+                      {letter}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="text-xs text-zinc-500 max-w-xs mx-auto pt-2">
+                * Note: You must be logged in with Discord to harvest Aura Points rewards.
+              </div>
+            </div>
+          </motion.div>
+        ) : activeGame === 'scramble' ? (
+          <motion.div
+            key="scramble-game"
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.95 }}
+            className="p-6 rounded-2xl bg-zinc-950 border border-zinc-800 text-center space-y-6 shadow-2xl relative max-w-md mx-auto"
+          >
+            <div className="flex justify-between items-center border-b border-zinc-800 pb-4">
+              <div className="flex items-center gap-3 text-left">
+                <button
+                  onClick={() => setActiveGame(null)}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800 text-zinc-400 hover:text-white transition-all"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </button>
+                <div>
+                  <h3 className="text-lg font-bold text-white">Aura Word Scramble</h3>
+                  <p className="text-xs text-zinc-400">Anagram solver for core software terms</p>
+                </div>
+              </div>
+              <button
+                onClick={startScramble}
+                className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-violet-500 hover:bg-violet-500/10 text-zinc-400 hover:text-violet-400 transition-all"
+                title="New Word"
+              >
+                <RotateCw className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-6">
+              {/* Randomized Scrambled Word */}
+              <div className="p-6 rounded-2xl bg-zinc-900 border border-zinc-800 relative overflow-hidden">
+                <div className="absolute inset-0 bg-gradient-to-br from-violet-500/5 to-fuchsia-500/5 pointer-events-none" />
+                <span className="text-xs font-mono font-bold text-violet-400 uppercase tracking-widest block mb-2">🌪️ Scrambled Characters</span>
+                <span className="text-3xl font-black text-white font-mono tracking-widest select-all">{scrambleScrambled}</span>
+              </div>
+
+              {/* Clue Hint */}
+              <div className="p-4 rounded-xl bg-zinc-900/40 border border-zinc-800/80 text-zinc-300 text-sm">
+                <span className="font-bold text-violet-400 font-mono text-xs uppercase block mb-1">💡 CLUE HINT</span>
+                {scrambleHint}
+              </div>
+
+              {/* Feedback */}
+              {scrambleFeedback && (
+                <div className={`p-3 rounded-xl border text-sm font-bold font-mono ${
+                  scrambleSolved
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 animate-pulse'
+                    : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                }`}>
+                  {scrambleFeedback}
+                </div>
+              )}
+
+              {/* Solving Input Form */}
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  disabled={scrambleSolved}
+                  value={scrambleInput}
+                  onChange={(e) => setScrambleInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') checkScrambleGuess();
+                  }}
+                  placeholder="Enter unscrambled word..."
+                  className="w-full px-4 py-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 focus:border-violet-500 focus:ring-1 focus:ring-violet-500 text-white font-mono font-bold text-center placeholder:text-zinc-600 outline-none transition-all uppercase"
+                />
+
+                <div className="flex gap-2">
+                  <button
+                    disabled={scrambleSolved}
+                    onClick={checkScrambleGuess}
+                    className="flex-1 py-3.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white font-bold transition-all text-sm active:scale-95 shadow-lg shadow-violet-500/10"
+                  >
+                    Submit Unscrambled
+                  </button>
+                  <button
+                    onClick={startScramble}
+                    className="px-4 py-3.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-400 hover:text-white transition-all active:scale-95"
+                    title="Skip Word"
+                  >
+                    Skip
+                  </button>
+                </div>
+              </div>
+
+              <div className="text-xs text-zinc-500 max-w-xs mx-auto pt-2">
+                * Note: Solve correctly for +15 AP. Requires Discord authentication.
+              </div>
+            </div>
           </motion.div>
         ) : (
           /* AURA BETTING CASINO DISPLAY */
