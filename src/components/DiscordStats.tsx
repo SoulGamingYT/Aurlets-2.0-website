@@ -340,6 +340,103 @@ export default function DiscordStats({
                 </div>
               </div>
 
+              {/* Leaderboards Row: Cumulative and Weekly */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Weekly Rewards Card */}
+                <div id="weekly-rewards-leaderboard" className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow space-y-4 text-left relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-3 bg-purple-500/10 text-purple-400 rounded-bl-xl border-l border-b border-purple-500/10 text-[10px] font-bold font-mono uppercase tracking-wider">
+                    Weekly Reward
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-mono font-black uppercase text-white flex items-center gap-1.5">
+                      🏆 Weekly Active Contenders
+                    </h3>
+                    <p className="text-[10px] text-zinc-500">Top 3 active users get 2500, 1500, 750 AP reward every Sunday 12:00PM PST.</p>
+                  </div>
+
+                  {!stats?.top3ActiveWeekly || stats.top3ActiveWeekly.length === 0 ? (
+                    <div className="text-zinc-500 text-xs font-mono text-center py-10 bg-zinc-900/10 rounded-xl border border-dashed border-zinc-900">
+                      No active users recorded for this weekly cycle yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 font-mono text-xs">
+                      {stats.top3ActiveWeekly.map((user: any, idx: number) => {
+                        const rewards = [2500, 1500, 750];
+                        const rankMedals = ['🥇', '🥈', '🥉'];
+                        const rankColors = ['text-amber-400', 'text-slate-300', 'text-amber-600'];
+                        return (
+                          <div key={user.name} className="flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-850">
+                            <div className="flex items-center gap-3">
+                              <span className={`text-lg ${rankColors[idx]}`}>{rankMedals[idx]}</span>
+                              <img 
+                                src={user.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80'} 
+                                alt={user.name} 
+                                className="w-8 h-8 rounded-full border border-zinc-700 object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div>
+                                <div className="text-white font-bold">{user.name}</div>
+                                <div className="text-[10px] text-purple-400 font-bold">@{user.discordUsername}</div>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-white font-bold">{user.messagesCount} messages</div>
+                              <div className="text-[10px] font-bold text-emerald-400">+{rewards[idx]} AP reward</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Cumulative Most Active Users since July 2, 2026 */}
+                <div id="cumulative-active-leaderboard" className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow space-y-4 text-left relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-3 bg-pink-500/10 text-pink-400 rounded-bl-xl border-l border-b border-pink-500/10 text-[10px] font-bold font-mono uppercase tracking-wider">
+                    Cumulative
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-mono font-black uppercase text-white flex items-center gap-1.5">
+                      🔥 Most Active Users
+                    </h3>
+                    <p className="text-[10px] text-zinc-500">Top contributors with highest activity starting from July 2, 2026.</p>
+                  </div>
+
+                  {!stats?.top3ActiveCumulative || stats.top3ActiveCumulative.length === 0 ? (
+                    <div className="text-zinc-500 text-xs font-mono text-center py-10 bg-zinc-900/10 rounded-xl border border-dashed border-zinc-900">
+                      No cumulative active users recorded since July 2, 2026.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 font-mono text-xs">
+                      {stats.top3ActiveCumulative.map((user: any, idx: number) => {
+                        const rankMedals = ['👑 1st', '🥈 2nd', '🥉 3rd'];
+                        return (
+                          <div key={user.name} className="flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-850">
+                            <div className="flex items-center gap-3">
+                              <span className="text-zinc-500 font-bold w-12 text-center text-[10px] bg-zinc-950 px-2 py-1 rounded border border-zinc-850">{rankMedals[idx]}</span>
+                              <img 
+                                src={user.avatarUrl || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&fit=crop&q=80'} 
+                                alt={user.name} 
+                                className="w-8 h-8 rounded-full border border-zinc-700 object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                              <div>
+                                <div className="text-white font-bold">{user.name}</div>
+                                <div className="text-[10px] text-pink-400 font-bold">@{user.discordUsername}</div>
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-white font-bold">{user.messagesCount} messages</div>
+                              <div className="text-[10px] text-zinc-500 font-bold">Tracked since July 2</div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               {/* Chart & Growth Filtering Section */}
               <div className="p-6 rounded-2xl bg-zinc-950 border border-zinc-900 shadow space-y-6">
                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-zinc-900 pb-4">

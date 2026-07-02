@@ -59,6 +59,8 @@ interface Farmer {
   gamesPlayed?: Record<string, number>;
   totalGamesPlayed?: number;
   discordMessagesCount?: number;
+  discordMessagesCountJuly2026?: number;
+  discordMessagesCountWeekly?: number;
   isAfk?: boolean;
   afkSince?: number;
   afkReason?: string;
@@ -1010,6 +1012,14 @@ export function startDiscordBot(
         
         const farmer = getOrCreateFarmerByDiscord(userId, message.author.username);
         farmer.discordMessagesCount = (farmer.discordMessagesCount || 0) + 1;
+        
+        // Track messages starting from July 2, 2026 local time
+        const july2Timestamp = 1782975600000; // July 2, 2026 00:00:00-07:00 local time
+        if (now >= july2Timestamp) {
+          farmer.discordMessagesCountJuly2026 = (farmer.discordMessagesCountJuly2026 || 0) + 1;
+          farmer.discordMessagesCountWeekly = (farmer.discordMessagesCountWeekly || 0) + 1;
+        }
+        
         farmer.lastActive = now;
 
         const count = (userMessageCounts.get(userId) || 0) + 1;

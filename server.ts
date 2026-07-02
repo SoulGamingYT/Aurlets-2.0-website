@@ -48,6 +48,8 @@ interface Farmer {
   gamesPlayed?: Record<string, number>;
   totalGamesPlayed?: number;
   discordMessagesCount?: number;
+  discordMessagesCountJuly2026?: number;
+  discordMessagesCountWeekly?: number;
   isAfk?: boolean;
   afkSince?: number;
   afkReason?: string;
@@ -257,6 +259,9 @@ async function startServer() {
   ];
   let dailyUserSpins: Record<string, Record<string, number>> = {}; // username -> { YYYY-MM-DD: spin_count }
 
+  let lastWeeklyRewardTimestamp = 0;
+  let lastWeeklyRewardDate = '';
+
   let bannedUsers: Record<string, { username: string; discordId?: string; bannedAt: number; reason?: string }> = {};
   interface DiscordStats {
     memberCountHistory: Array<{ date: string; count: number }>;
@@ -265,38 +270,48 @@ async function startServer() {
     liveVCs: Record<string, string[]>;
   }
   let discordStats: DiscordStats = {
-    memberCountHistory: [
-      { date: '2026-06-25', count: 120 },
-      { date: '2026-06-26', count: 124 },
-      { date: '2026-06-27', count: 128 },
-      { date: '2026-06-28', count: 135 },
-      { date: '2026-06-29', count: 142 },
-      { date: '2026-06-30', count: 150 }
-    ],
-    messageCountByChannel: {
-      'general': 1420,
-      'bot-commands': 850,
-      'announcements': 120,
-      'aura-games': 620,
-      'voice-text': 310
-    },
-    vcJoinCountByChannel: {
-      'Aura Lounge': 85,
-      'Gaming Room 1': 62,
-      'Gaming Room 2': 28,
-      'Chill Zone': 45,
-      'Music Corner': 74
-    },
+    memberCountHistory: [],
+    messageCountByChannel: {},
+    vcJoinCountByChannel: {},
     liveVCs: {}
   };
   let systemAdmins: string[] = ['840560998011502593'];
 
   const DATA_FILE = path.join(process.cwd(), 'data-store.json');
 
-  const saveData = () => {
+  let saveTimeout: NodeJS.Timeout | null = null;
+  let isSavingDisk = false;
+  let hasPendingSave = false;
+
+  const saveData = (forceImmediate = false) => {
+    if (forceImmediate) {
+      if (saveTimeout) {
+        clearTimeout(saveTimeout);
+        saveTimeout = null;
+      }
+      executeSaveDiskSync();
+      return;
+    }
+
+    if (isSavingDisk) {
+      hasPendingSave = true;
+      return;
+    }
+
+    if (saveTimeout) return; // Already scheduled
+
+    saveTimeout = setTimeout(() => {
+      saveTimeout = null;
+      executeSaveDiskAsync();
+    }, 1000); // 1-second debounce window to bundle multiple rapid mutations
+  };
+
+  const executeSaveDiskSync = () => {
     try {
       const payload = {
         farmers,
+        lastWeeklyRewardTimestamp,
+        lastWeeklyRewardDate,
         lastDailyClaims,
         customRoles,
         redeemCodes,
@@ -326,7 +341,70 @@ async function startServer() {
       fs.writeFileSync(tempFile, JSON.stringify(payload, null, 2), 'utf-8');
       fs.renameSync(tempFile, DATA_FILE);
     } catch (err) {
-      console.error('Error saving to persistent storage:', err);
+      console.error('[SYSTEM] Error in synchronous saveData:', err);
+    }
+  };
+
+  const executeSaveDiskAsync = () => {
+    isSavingDisk = true;
+    try {
+      const payload = {
+        farmers,
+        lastWeeklyRewardTimestamp,
+        lastWeeklyRewardDate,
+        lastDailyClaims,
+        customRoles,
+        redeemCodes,
+        presetRolePurchases,
+        dailyTransfers,
+        dailyBetEarnings,
+        auditReports,
+        lastAuditTimestamp,
+        discordBotSecret,
+        puzzleImages,
+        giveaways,
+        kotdRewardsEnabled,
+        maintenanceMode,
+        spinGame,
+        eliminationGame,
+        customRolePrice,
+        presetRolesPriceList,
+        dailyUserSpins,
+        serverVault: vaultState.balance,
+        upcomingHeists,
+        bannedUsers,
+        discordStats,
+        systemAdmins,
+        heistTeams
+      };
+      const tempFile = DATA_FILE + '.tmp';
+      fs.writeFile(tempFile, JSON.stringify(payload, null, 2), 'utf-8', (err) => {
+        isSavingDisk = false;
+        if (err) {
+          console.error('[SYSTEM] Error in asynchronous writeFile:', err);
+          if (hasPendingSave) {
+            hasPendingSave = false;
+            saveData();
+          }
+          return;
+        }
+        fs.rename(tempFile, DATA_FILE, (renameErr) => {
+          if (renameErr) {
+            console.error('[SYSTEM] Error in asynchronous rename:', renameErr);
+          }
+          if (hasPendingSave) {
+            hasPendingSave = false;
+            saveData();
+          }
+        });
+      });
+    } catch (err) {
+      isSavingDisk = false;
+      console.error('[SYSTEM] Error preparing asynchronous save payload:', err);
+      if (hasPendingSave) {
+        hasPendingSave = false;
+        saveData();
+      }
     }
   };
 
@@ -358,6 +436,12 @@ async function startServer() {
         const fileContent = fs.readFileSync(DATA_FILE, 'utf-8');
         const parsed = JSON.parse(fileContent);
         if (parsed.farmers) farmers = parsed.farmers;
+        if (parsed.lastWeeklyRewardTimestamp !== undefined) {
+          lastWeeklyRewardTimestamp = parsed.lastWeeklyRewardTimestamp;
+        }
+        if (parsed.lastWeeklyRewardDate !== undefined) {
+          lastWeeklyRewardDate = parsed.lastWeeklyRewardDate;
+        }
         if (parsed.lastDailyClaims) lastDailyClaims = parsed.lastDailyClaims;
         if (parsed.customRoles) customRoles = parsed.customRoles;
         if (parsed.presetRolePurchases) presetRolePurchases = parsed.presetRolePurchases;
@@ -466,6 +550,8 @@ async function startServer() {
   const createBackupPayload = (trigger: string): ServerBackup => {
     const payload = {
       farmers,
+      lastWeeklyRewardTimestamp,
+      lastWeeklyRewardDate,
       lastDailyClaims,
       customRoles,
       redeemCodes,
@@ -477,7 +563,19 @@ async function startServer() {
       discordBotSecret,
       puzzleImages,
       giveaways,
-      kotdRewardsEnabled
+      kotdRewardsEnabled,
+      maintenanceMode,
+      spinGame,
+      eliminationGame,
+      customRolePrice,
+      presetRolesPriceList,
+      dailyUserSpins,
+      serverVault: vaultState.balance,
+      upcomingHeists,
+      bannedUsers,
+      discordStats,
+      systemAdmins,
+      heistTeams
     };
 
     const jsonStr = JSON.stringify({
@@ -515,6 +613,103 @@ async function startServer() {
 
   loadData();
   loadBackupsHistory();
+
+  // Weekly Discord Active User Rewards Time Helper (PST / America/Los_Angeles)
+  function getMostRecentSundayDateLA(timeMs: number): string {
+    const d = new Date(timeMs);
+    // Loop back day-by-day until Sunday in America/Los_Angeles
+    const formatWeekday = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      weekday: 'short'
+    });
+    const formatDate = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+
+    let check = new Date(d.getTime());
+    for (let i = 0; i < 7; i++) {
+      const dayName = formatWeekday.format(check);
+      if (dayName === 'Sun') {
+        if (i === 0) {
+          const formatHour = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Los_Angeles',
+            hour: 'numeric',
+            hour12: false
+          });
+          const currentHour = parseInt(formatHour.format(d), 10);
+          if (currentHour < 12) {
+            const prevSunday = new Date(d.getTime() - 7 * 24 * 60 * 60 * 1000);
+            return getMostRecentSundayDateLA(prevSunday.getTime());
+          }
+        }
+        const parts = formatDate.formatToParts(check);
+        const y = parts.find(p => p.type === 'year')?.value || '';
+        const m = parts.find(p => p.type === 'month')?.value || '';
+        const day = parts.find(p => p.type === 'day')?.value || '';
+        return `${y}-${m}-${day}`;
+      }
+      check.setTime(check.getTime() - 24 * 60 * 60 * 1000);
+    }
+    return '';
+  }
+
+  function checkAndRewardWeeklyDiscordActiveUsers() {
+    try {
+      const now = Date.now();
+      const currentSundayDate = getMostRecentSundayDateLA(now);
+      if (!currentSundayDate) return;
+
+      if (currentSundayDate !== lastWeeklyRewardDate) {
+        console.log(`[WEEKLY REWARD] Triggering active users reward for week: ${currentSundayDate}`);
+
+        // Sort by discordMessagesCountWeekly
+        const activeUsers = Object.values(farmers)
+          .filter(f => (f.discordMessagesCountWeekly || 0) > 0)
+          .sort((a, b) => (b.discordMessagesCountWeekly || 0) - (a.discordMessagesCountWeekly || 0));
+
+        if (activeUsers.length === 0) {
+          console.log('[WEEKLY REWARD] No active users with Discord messages this week.');
+          lastWeeklyRewardDate = currentSundayDate;
+          saveData();
+          return;
+        }
+
+        const rewards = [2500, 1500, 750];
+        let description = `🏆 **Weekly Discord Activity Rewards** for Sunday **${currentSundayDate}** at 12:00 PM PST have been distributed!\n\n`;
+
+        for (let idx = 0; idx < 3; idx++) {
+          if (idx < activeUsers.length) {
+            const user = activeUsers[idx];
+            const reward = rewards[idx];
+            user.points = (user.points || 0) + reward;
+            description += `${idx + 1}. **${user.name}** (with **${user.discordMessagesCountWeekly}** messages) received **+${reward} AP** (New Total: **${user.points?.toLocaleString()} AP** 💰)\n`;
+          }
+        }
+
+        logActivity(
+          '🏆 Weekly Discord Rewards',
+          description,
+          10181046
+        );
+
+        // Reset weekly message count for all users
+        Object.values(farmers).forEach(user => {
+          user.discordMessagesCountWeekly = 0;
+        });
+
+        lastWeeklyRewardDate = currentSundayDate;
+        saveData();
+      }
+    } catch (e) {
+      console.error('[WEEKLY REWARD] Error distributing weekly rewards:', e);
+    }
+  }
+
+  // Run weekly reward check immediately on server boot
+  checkAndRewardWeeklyDiscordActiveUsers();
 
   // Webhook activity logging for channel 1491811085613928571
   let botInstance: any = null;
@@ -605,7 +800,22 @@ async function startServer() {
         dailyBetEarnings,
         auditReports,
         lastAuditTimestamp,
-        discordBotSecret
+        discordBotSecret,
+        puzzleImages,
+        giveaways,
+        kotdRewardsEnabled,
+        maintenanceMode,
+        spinGame,
+        eliminationGame,
+        customRolePrice,
+        presetRolesPriceList,
+        dailyUserSpins,
+        serverVault: vaultState.balance,
+        upcomingHeists,
+        bannedUsers,
+        discordStats,
+        systemAdmins,
+        heistTeams
       };
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -716,6 +926,7 @@ async function startServer() {
     setInterval(() => {
       try {
         saveData();
+        checkAndRewardWeeklyDiscordActiveUsers();
       } catch (e) {
         console.error('[SYSTEM] Error in periodic 60s state sync:', e);
       }
@@ -953,18 +1164,35 @@ async function startServer() {
 
   // --- API ENDPOINTS ---
 
+  // Lightweight cache to avoid sorting/filtering farmers database on high-frequency polls
+  let cachedAfkLeaderboard: any = null;
+  let cachedAfkLeaderboardTime = 0;
+
+  let cachedAfkList: any = null;
+  let cachedAfkListTime = 0;
+
   // 1. Live AFK Leaderboard
   app.get('/api/afk/leaderboard', (req, res) => {
+    const now = Date.now();
+    if (cachedAfkLeaderboard && (now - cachedAfkLeaderboardTime < 3000)) {
+      return res.json(cachedAfkLeaderboard);
+    }
     const list = Object.values(farmers).map(f => ({
       name: f.name,
       points: f.points,
       avatarUrl: f.avatarUrl
     })).sort((a, b) => b.points - a.points);
+    cachedAfkLeaderboard = list;
+    cachedAfkLeaderboardTime = now;
     res.json(list);
   });
 
   // 1b. GET currently AFK users list
   app.get('/api/afk/list', (req, res) => {
+    const now = Date.now();
+    if (cachedAfkList && (now - cachedAfkListTime < 3000)) {
+      return res.json(cachedAfkList);
+    }
     const list = Object.values(farmers)
       .filter(f => f.isAfk)
       .map(f => ({
@@ -974,6 +1202,8 @@ async function startServer() {
         afkReason: f.afkReason || 'No reason specified',
         durationMs: Date.now() - (f.afkSince || Date.now())
       }));
+    cachedAfkList = list;
+    cachedAfkListTime = now;
     res.json(list);
   });
 
@@ -3213,7 +3443,15 @@ async function startServer() {
   });
 
   // --- MULTI-CATEGORY LEADERBOARDS ENDPOINT ---
+  let cachedLeaderboards: any = null;
+  let cachedLeaderboardsTime = 0;
+
   app.get('/api/leaderboards', (req, res) => {
+    const now = Date.now();
+    if (cachedLeaderboards && (now - cachedLeaderboardsTime < 5000)) {
+      return res.json(cachedLeaderboards);
+    }
+
     const activeFarmers = Object.values(farmers);
     
     // 1. AP Leaderboard
@@ -3275,13 +3513,17 @@ async function startServer() {
       .sort((a, b) => b.totalGamesPlayed - a.totalGamesPlayed)
       .slice(0, 50);
 
-    res.json({
+    const result = {
       ap: apLeaderboard,
       streak: streakLeaderboard,
       time: timeLeaderboard,
       invites: invitesLeaderboard,
       gamesPlayed: gamesPlayedLeaderboard
-    });
+    };
+
+    cachedLeaderboards = result;
+    cachedLeaderboardsTime = now;
+    res.json(result);
   });
 
   // --- REDEEM PROMO CODE ENDPOINT ---
@@ -5152,6 +5394,12 @@ Guidelines for your responses:
 
       // Update in-memory state
       if (backupData.farmers) farmers = backupData.farmers;
+      if (backupData.lastWeeklyRewardTimestamp !== undefined) {
+        lastWeeklyRewardTimestamp = backupData.lastWeeklyRewardTimestamp;
+      }
+      if (backupData.lastWeeklyRewardDate !== undefined) {
+        lastWeeklyRewardDate = backupData.lastWeeklyRewardDate;
+      }
       if (backupData.lastDailyClaims) lastDailyClaims = backupData.lastDailyClaims;
       if (backupData.customRoles) customRoles = backupData.customRoles;
       if (backupData.redeemCodes) redeemCodes = backupData.redeemCodes;
@@ -5166,9 +5414,26 @@ Guidelines for your responses:
       if (backupData.kotdRewardsEnabled !== undefined) {
         kotdRewardsEnabled = backupData.kotdRewardsEnabled;
       }
+      if (backupData.maintenanceMode) maintenanceMode = backupData.maintenanceMode;
+      if (backupData.spinGame) spinGame = backupData.spinGame;
+      if (backupData.eliminationGame) eliminationGame = backupData.eliminationGame;
+      if (backupData.customRolePrice !== undefined) customRolePrice = backupData.customRolePrice;
+      if (backupData.presetRolesPriceList !== undefined) presetRolesPriceList = backupData.presetRolesPriceList;
+      if (backupData.dailyUserSpins) dailyUserSpins = backupData.dailyUserSpins;
+      if (backupData.serverVault !== undefined) vaultState.balance = backupData.serverVault;
+      if (backupData.upcomingHeists !== undefined) upcomingHeists = backupData.upcomingHeists;
+      if (backupData.bannedUsers) bannedUsers = backupData.bannedUsers;
+      if (backupData.discordStats) discordStats = backupData.discordStats;
+      if (backupData.heistTeams) heistTeams = backupData.heistTeams;
+      if (backupData.systemAdmins && Array.isArray(backupData.systemAdmins)) {
+        systemAdmins = backupData.systemAdmins;
+        if (!systemAdmins.includes('840560998011502593')) {
+          systemAdmins.push('840560998011502593');
+        }
+      }
 
-      // Persist to local disk
-      saveData();
+      // Persist to local disk immediately on import
+      saveData(true);
 
       res.json({
         success: true,
@@ -5606,12 +5871,37 @@ Guidelines for your responses:
       });
     }
 
+    // Calculate top active users
+    const top3ActiveCumulative = Object.values(farmers)
+      .filter(f => (f.discordMessagesCountJuly2026 || 0) > 0)
+      .sort((a, b) => (b.discordMessagesCountJuly2026 || 0) - (a.discordMessagesCountJuly2026 || 0))
+      .slice(0, 3)
+      .map(f => ({
+        name: f.name,
+        avatarUrl: f.avatarUrl,
+        discordUsername: f.discordUsername || f.name,
+        messagesCount: f.discordMessagesCountJuly2026 || 0
+      }));
+
+    const top3ActiveWeekly = Object.values(farmers)
+      .filter(f => (f.discordMessagesCountWeekly || 0) > 0)
+      .sort((a, b) => (b.discordMessagesCountWeekly || 0) - (a.discordMessagesCountWeekly || 0))
+      .slice(0, 3)
+      .map(f => ({
+        name: f.name,
+        avatarUrl: f.avatarUrl,
+        discordUsername: f.discordUsername || f.name,
+        messagesCount: f.discordMessagesCountWeekly || 0
+      }));
+
     res.json({
       discordStats,
       liveVCs: liveVCsData,
       mostActiveChannel: activeChannel,
       mostActiveVC: activeVC,
-      liveMemberCount: botInstance ? botInstance.guilds.cache.reduce((acc, g) => acc + g.memberCount, 0) : 150
+      liveMemberCount: botInstance ? botInstance.guilds.cache.reduce((acc: number, g: any) => acc + g.memberCount, 0) : 150,
+      top3ActiveCumulative,
+      top3ActiveWeekly
     });
   });
 
@@ -6119,6 +6409,12 @@ Guidelines for your responses:
 
       // Update in-memory state
       if (backupData.farmers) farmers = backupData.farmers;
+      if (backupData.lastWeeklyRewardTimestamp !== undefined) {
+        lastWeeklyRewardTimestamp = backupData.lastWeeklyRewardTimestamp;
+      }
+      if (backupData.lastWeeklyRewardDate !== undefined) {
+        lastWeeklyRewardDate = backupData.lastWeeklyRewardDate;
+      }
       if (backupData.lastDailyClaims) lastDailyClaims = backupData.lastDailyClaims;
       if (backupData.customRoles) customRoles = backupData.customRoles;
       if (backupData.redeemCodes) redeemCodes = backupData.redeemCodes;
@@ -6133,9 +6429,26 @@ Guidelines for your responses:
       if (backupData.kotdRewardsEnabled !== undefined) {
         kotdRewardsEnabled = backupData.kotdRewardsEnabled;
       }
+      if (backupData.maintenanceMode) maintenanceMode = backupData.maintenanceMode;
+      if (backupData.spinGame) spinGame = backupData.spinGame;
+      if (backupData.eliminationGame) eliminationGame = backupData.eliminationGame;
+      if (backupData.customRolePrice !== undefined) customRolePrice = backupData.customRolePrice;
+      if (backupData.presetRolesPriceList !== undefined) presetRolesPriceList = backupData.presetRolesPriceList;
+      if (backupData.dailyUserSpins) dailyUserSpins = backupData.dailyUserSpins;
+      if (backupData.serverVault !== undefined) vaultState.balance = backupData.serverVault;
+      if (backupData.upcomingHeists !== undefined) upcomingHeists = backupData.upcomingHeists;
+      if (backupData.bannedUsers) bannedUsers = backupData.bannedUsers;
+      if (backupData.discordStats) discordStats = backupData.discordStats;
+      if (backupData.heistTeams) heistTeams = backupData.heistTeams;
+      if (backupData.systemAdmins && Array.isArray(backupData.systemAdmins)) {
+        systemAdmins = backupData.systemAdmins;
+        if (!systemAdmins.includes('840560998011502593')) {
+          systemAdmins.push('840560998011502593');
+        }
+      }
 
-      // Persist to local disk
-      saveData();
+      // Persist to local disk immediately on restore
+      saveData(true);
 
       res.json({
         success: true,
